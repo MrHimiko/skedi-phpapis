@@ -1,0 +1,172 @@
+# This file is the entry point to configure your own services.
+# Files in the packages/ subdirectory configure your dependencies.
+
+# Put parameters here that don't need to change on each machine where the app is deployed
+# https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
+parameters:
+    google.client_id: '%env(GOOGLE_CLIENT_ID)%'
+    google.client_secret: '%env(GOOGLE_CLIENT_SECRET)%'
+    google.redirect_uri: '%env(GOOGLE_REDIRECT_URI)%'
+
+services:
+    # default configuration for services in *this* file
+    _defaults:
+        autowire: true      # Automatically injects dependencies in your services.
+        autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
+
+    # makes classes in src/ available to be used as services
+    # this creates a service per class whose id is the fully-qualified class name
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
+
+    App\Plugins\Account\Listener\RequestListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.request, priority: 10 }
+
+    App\Listener\RequestListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.request, priority: 10 }
+
+    App\Listener\ExceptionListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.exception }
+
+    # Integration Services
+    app.integration.google_calendar:
+        class: App\Plugins\Integrations\Google\Calendar\Service\GoogleCalendarService
+        arguments:
+            - '@doctrine.orm.entity_manager'
+            - '@App\Plugins\Integrations\Common\Repository\IntegrationRepository'
+            - '@App\Plugins\Account\Service\UserAvailabilityService'
+            - '@App\Service\CrudManager'
+
+    app.integration.google_meet:
+        class: App\Plugins\Integrations\Google\Meet\Service\GoogleMeetService
+        arguments:
+            - '@doctrine.orm.entity_manager'
+            - '@App\Plugins\Integrations\Common\Repository\IntegrationRepository'
+            - '@App\Plugins\Integrations\Google\Meet\Repository\GoogleMeetEventRepository' 
+            - '@App\Service\CrudManager'
+            - '@parameter_bag'  
+
+    # Make services available for dependency injection
+    App\Plugins\Integrations\Google\Calendar\Service\GoogleCalendarService: '@app.integration.google_calendar'
+    App\Plugins\Integrations\Google\Meet\Service\GoogleMeetService: '@app.integration.google_meet'
+
+
+
+    App\Plugins\Email\Service\Providers\ResendProvider:
+        arguments:
+            $apiKey: '%env(RESEND_API_KEY)%'
+            $logger: '@logger'
+            $templateMap:
+                meeting_scheduled: ~
+                meeting_scheduled_host: ~
+                meeting_reminder: ~
+                meeting_cancelled: ~
+                booking_created: ~
+                booking_confirmed: ~
+                invitation: ~
+                user_welcome: ~
+                team_invitation: ~
+                blank: ~
+
+    # Update the EmailService to use ResendProvider
+    App\Plugins\Email\Service\EmailService:
+        arguments:
+            $provider: '@App\Plugins\Email\Service\Providers\ResendProvider'
+            $queueService: '@App\Plugins\Email\Service\EmailQueueService'
+            $templateService: '@App\Plugins\Email\Service\EmailTemplateService'
+            $logService: '@App\Plugins\Email\Service\EmailLogService'
+            $crudManager: '@App\Service\CrudManager'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $logger: '@logger'
+            $queueByDefault: true
+
+
+    App\Plugins\Email\Service\EmailQueueService:
+        arguments:
+            $entityManager: '@doctrine.orm.entity_manager'
+            $queueRepository: '@App\Plugins\Email\Repository\EmailQueueRepository'
+            $crudManager: '@App\Service\CrudManager'
+
+    App\Plugins\Email\Service\EmailTemplateService:
+        arguments:
+            $entityManager: '@doctrine.orm.entity_manager'
+            $templateRepository: '@App\Plugins\Email\Repository\EmailTemplateRepository'
+            $crudManager: '@App\Service\CrudManager'
+
+    App\Plugins\Email\Service\EmailLogService:
+        arguments:
+            $entityManager: '@doctrine.orm.entity_manager'
+            $logRepository: '@App\Plugins\Email\Repository\EmailLogRepository'
+            $crudManager: '@App\Service\CrudManager'
+
+
+
+
+
+    # Billing 
+    # Billing 
+    # Billing 
+
+     # Billing Service
+    App\Plugins\Billing\Service\BillingService:
+        arguments:
+            $crudManager: '@App\Service\CrudManager'
+            $planRepository: '@App\Plugins\Billing\Repository\BillingPlanRepository'
+            $subscriptionRepository: '@App\Plugins\Billing\Repository\OrganizationSubscriptionRepository'
+            $invitationRepository: '@App\Plugins\Invitations\Repository\InvitationRepository'
+            $entityManager: '@doctrine.orm.entity_manager'
+        public: true
+
+    # Stripe Service - NO LOGGER
+    App\Plugins\Billing\Service\StripeService:
+        arguments:
+            $stripeSecretKey: '%env(STRIPE_SECRET_KEY)%'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $additionalSeatsPriceId: '%env(STRIPE_ADDITIONAL_SEATS_PRICE_ID)%'
+        public: true
+
+    # Stripe Webhook Service
+    App\Plugins\Billing\Service\StripeWebhookService:
+        arguments:
+            $stripeSecretKey: '%env(STRIPE_SECRET_KEY)%'
+            $webhookSecret: '%env(STRIPE_WEBHOOK_SECRET)%'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $organizationService: '@App\Plugins\Organizations\Service\OrganizationService'
+            $planRepository: '@App\Plugins\Billing\Repository\BillingPlanRepository'
+            $additionalSeatsPriceId: '%env(STRIPE_ADDITIONAL_SEATS_PRICE_ID)%'
+        public: true
+
+    # Repositories
+    App\Plugins\Billing\Repository\BillingPlanRepository:
+        tags: ['doctrine.repository_service']
+        
+    App\Plugins\Billing\Repository\OrganizationSubscriptionRepository:
+        tags: ['doctrine.repository_service']
+        
+    App\Plugins\Invitations\Repository\InvitationRepository:
+        tags: ['doctrine.repository_service']
+
+    # Controllers - NO LOGGER
+    App\Plugins\Billing\Controller\BillingController:
+        arguments:
+            - '@App\Service\ResponseService'
+            - '@App\Plugins\Billing\Service\BillingService'
+            - '@App\Plugins\Billing\Service\StripeService'
+            - '@App\Plugins\Organizations\Service\OrganizationService'
+            - '@App\Plugins\Organizations\Service\UserOrganizationService'
+            - '@doctrine.orm.entity_manager'
+        tags: ['controller.service_arguments']
+        public: true
+
+    App\Plugins\Billing\Controller\StripeWebhookController:
+        arguments:
+            - '@App\Plugins\Billing\Service\StripeWebhookService'
+        tags: ['controller.service_arguments']
+        public: true

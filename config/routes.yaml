@@ -1,0 +1,104 @@
+account:
+    resource: ../src/Plugins/Account/Controller/
+    type: attribute
+
+organizations:
+    resource: ../src/Plugins/Organizations/Controller/
+    type: attribute
+
+teams:
+    resource: ../src/Plugins/Teams/Controller/
+    type: attribute
+
+events:
+    resource: ../src/Plugins/Events/Controller/
+    type: attribute
+
+forms:
+    resource: ../src/Plugins/Forms/Controller/
+    type: attribute
+
+contacts:
+    resource: ../src/Plugins/Contacts/Controller/
+    type: attribute
+
+workflows:
+    resource: ../src/Plugins/Workflows/Controller/
+    type: attribute
+
+
+PotentialLeads:
+    resource: ../src/Plugins/PotentialLeads/Controller/
+    type: attribute
+
+invitations:
+    resource: ../src/Plugins/Invitations/Controller/
+    type: attribute
+
+billing:
+    resource: ../src/Plugins/Billing/Controller/
+    type: attribute
+
+integrations:
+    resource: ../src/Plugins/Integrations/Common/Controller/
+    type: attribute
+
+
+
+google_calendar:
+    resource: ../src/Plugins/Integrations/Google/Calendar/Controller/
+    type: attribute
+
+google_meet:
+    resource: ../src/Plugins/Integrations/Google/Meet/Controller/
+    type: attribute
+
+microsoft_outlook:
+    resource: ../src/Plugins/Integrations/Microsoft/Outlook/Controller/
+    type: attribute
+
+
+
+# billing:
+#     resource: ../src/Plugins/Billing/Controller/
+#     type: attribute
+
+# storage:
+#     resource: ../src/Plugins/Storage/Controller/
+#     type: attribute
+
+# users:
+#     resource: ../src/Plugins/Users/Controller/
+#     type: attribute
+
+# activity:
+#     resource: ../src/Plugins/Activity/Controller/
+#     type: attribute
+
+# widgets:
+#     resource: ../src/Plugins/Widgets/Controller/
+#     type: attribute
+
+# notifications:
+#     resource: ../src/Plugins/Notifications/Controller/
+#     type: attribute
+
+# notes:
+#     resource: ../src/Plugins/Notes/Controller/
+#     type: attribute
+
+# metrics:
+#     resource: ../src/Plugins/Metrics/Controller/
+#     type: attribute
+
+# countries:
+#     resource: ../src/Plugins/Countries/Controller/
+#     type: attribute
+
+# people:
+#     resource: ../src/Plugins/People/Controller/
+#     type: attribute
+
+# extensions:
+#     resource: ../src/Plugins/Extensions/Controller/
+#     type: attribute

@@ -1,0 +1,228 @@
+doctrine:
+    dbal:
+        charset: utf8
+        driver: 'pdo_pgsql'
+        server_version: '17' 
+        url: '%env(resolve:DATABASE_URL)%'
+        # replicas:
+        #     replica1:
+        #         url: '%env(resolve:DATABASE_REPLICA_1_URL)%'
+        #     replica2:
+        #         url: '%env(resolve:DATABASE_REPLICA_2_URL)%'
+
+        profiling_collect_backtrace: '%kernel.debug%'
+        use_savepoints: true
+        types:
+            varchar_array: App\Doctrine\VarcharArrayType
+            integer_array: App\Doctrine\IntegerArrayType
+            object_array: App\Doctrine\ObjectArrayType
+    orm:
+        auto_generate_proxy_classes: false
+        enable_lazy_ghost_objects: true
+        report_fields_where_declared: true
+        validate_xml_mapping: true
+        naming_strategy: doctrine.orm.naming_strategy.underscore_number_aware
+        identity_generation_preferences:
+            Doctrine\DBAL\Platforms\PostgreSQLPlatform: identity
+        auto_mapping: false
+        dql:
+            string_functions:
+                TO_CHAR: App\Doctrine\ToCharFunction
+        mappings:
+            Organizations:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Organizations/Entity'
+                prefix: 'App\Plugins\Organizations\Entity'
+                alias: Organizations
+            Account:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Account/Entity'
+                prefix: 'App\Plugins\Account\Entity'
+                alias: Account
+            Teams:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Teams/Entity'
+                prefix: 'App\Plugins\Teams\Entity'
+                alias: Teams
+            Events:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Events/Entity'
+                prefix: 'App\Plugins\Events\Entity'
+                alias: Events
+
+            Forms:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Forms/Entity'
+                prefix: 'App\Plugins\Forms\Entity'
+                alias: Forms
+
+            Email:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Email/Entity'
+                prefix: 'App\Plugins\Email\Entity'
+                alias: Email
+
+            Contacts:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Contacts/Entity'
+                prefix: 'App\Plugins\Contacts\Entity'
+                alias: Contacts
+
+            Workflows:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Workflows/Entity'
+                prefix: 'App\Plugins\Workflows\Entity'
+                alias: Workflows
+
+            Billing:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Billing/Entity'
+                prefix: 'App\Plugins\Billing\Entity'
+                alias: Billing
+
+            PotentialLeads:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/PotentialLeads/Entity'
+                prefix: 'App\Plugins\PotentialLeads\Entity'
+                alias: PotentialLeads
+
+            Invitations:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Invitations/Entity'
+                prefix: 'App\Plugins\Invitations\Entity'
+                alias: Invitations
+
+
+            Integrations:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Integrations/Common/Entity'
+                prefix: 'App\Plugins\Integrations\Common\Entity'
+                alias: Integrations
+
+            GoogleIntegrations:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Integrations/Google'
+                prefix: 'App\Plugins\Integrations\Google'
+                alias: GoogleIntegrations
+
+            MicrosoftIntegrations:
+                is_bundle: false
+                type: attribute
+                dir: '%kernel.project_dir%/src/Plugins/Integrations/Microsoft'
+                prefix: 'App\Plugins\Integrations\Microsoft'
+                alias: MicrosoftIntegrations
+
+
+            # Account:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Account/Entity'
+            #     prefix: 'App\Plugins\Account\Entity'
+            #     alias: Account
+            # Billing:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Billing/Entity'
+            #     prefix: 'App\Plugins\Billing\Entity'
+            #     alias: Billing
+            # Users:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Users/Entity'
+            #     prefix: 'App\Plugins\Users\Entity'
+            #     alias: Users
+            # Storage:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Storage/Entity'
+            #     prefix: 'App\Plugins\Storage\Entity'
+            #     alias: Storage
+            # Mailer:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Mailer/Entity'
+            #     prefix: 'App\Plugins\Mailer\Entity'
+            #     alias: Mailer
+            # Activity:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Activity/Entity'
+            #     prefix: 'App\Plugins\Activity\Entity'
+            #     alias: Activity
+            # Widgets:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Widgets/Entity'
+            #     prefix: 'App\Plugins\Widgets\Entity'
+            #     alias: Widgets
+            # Notifications:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Notifications/Entity'
+            #     prefix: 'App\Plugins\Notifications\Entity'
+            #     alias: Notifications
+            # Notes:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Notes/Entity'
+            #     prefix: 'App\Plugins\Notes\Entity'
+            #     alias: Notes
+            # Countries:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Countries/Entity'
+            #     prefix: 'App\Plugins\Countries\Entity'
+            #     alias: Countries
+            # People:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/People/Entity'
+            #     prefix: 'App\Plugins\People\Entity'
+            #     alias: People
+            # Extensions:
+            #     is_bundle: false
+            #     type: attribute
+            #     dir: '%kernel.project_dir%/src/Plugins/Extensions/Entity'
+            #     prefix: 'App\Plugins\Extensions\Entity'
+            #     alias: Extensions
+        controller_resolver:
+            auto_mapping: false
+
+when@test:
+    doctrine:
+        dbal:
+            # "TEST_TOKEN" is typically set by ParaTest
+            dbname_suffix: '_test%env(default::TEST_TOKEN)%'
+
+when@prod:
+    doctrine:
+        orm:
+            auto_generate_proxy_classes: false
+            proxy_dir: '%kernel.build_dir%/doctrine/orm/Proxies'
+            query_cache_driver:
+                type: pool
+                pool: doctrine.system_cache_pool
+            result_cache_driver:
+                type: pool
+                pool: doctrine.result_cache_pool
+
+    framework:
+        cache:
+            pools:
+                doctrine.result_cache_pool:
+                    adapter: cache.app
+                doctrine.system_cache_pool:
+                    adapter: cache.system

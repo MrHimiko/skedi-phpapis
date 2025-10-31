@@ -1,0 +1,6 @@
+monolog:
+  handlers:
+    main:
+      type: stream
+      path: "%kernel.project_dir%/var/log/app.log"
+      level: debug

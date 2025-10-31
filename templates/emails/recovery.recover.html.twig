@@ -1,0 +1,28 @@
+{% extends 'emails/base.html.twig' %}
+
+{% block title %}Password Recovery Successful{% endblock %}
+
+{% block additional_styles %}
+    .success-message {
+        background: #e8f5e9;
+        padding: 10px;
+        border-radius: 4px;
+        text-align: center;
+        margin: 15px 0;
+        color: #2e7d32;
+    }
+{% endblock %}
+
+{% block header %}Password Successfully Reset{% endblock %}
+
+{% block content %}
+    <p>Hello {{ name }},</p>
+    <p>Your password has been successfully reset.</p>
+    <div class="success-message">You can now log in with your new password.</div>
+    <p>If you did not make this change, please contact our support team immediately.</p>
+{% endblock %}
+
+{% block footer %}
+    Best regards,<br>
+    Your Application Team
+{% endblock %}
