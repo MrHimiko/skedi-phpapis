@@ -10,18 +10,20 @@ use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 use Doctrine\ORM\EntityManagerInterface;
 
 use App\Service\ResponseService;
+
 use App\Plugins\Account\Service\LoginService;
 use App\Plugins\Account\Service\UserService;
-use App\Plugins\Account\Service\TeamService;
-use App\Plugins\Account\Service\EventService;
 use App\Plugins\Account\Service\RegisterService;
-use App\Plugins\Account\Service\OrganizationService;
-use App\Plugins\Account\Service\UserOrganizationService;
-use App\Plugins\Account\Service\TeamPermissionService;
-use App\Plugins\Account\Service\InvitationService;
 use App\Plugins\Account\Service\PasswordResetService;
 use App\Plugins\Account\Service\EmailVerificationService;
 use App\Plugins\Account\Exception\AccountException;
+
+use App\Plugins\Events\Service\EventService;
+use App\Plugins\Teams\Service\TeamService;
+use App\Plugins\Organizations\Service\OrganizationService;
+use App\Plugins\Organizations\Service\UserOrganizationService;
+use App\Plugins\Teams\Service\TeamPermissionService;
+use App\Plugins\Invitations\Service\InvitationService;
 
 #[Route('/api/account', name: 'api_account_')]
 class MainController extends AbstractController

@@ -3,10 +3,8 @@
 namespace App\Plugins\Account\Service;
 
 use Doctrine\ORM\EntityManagerInterface;
-use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 use Symfony\Component\Validator\Constraints as Assert;
 use App\Service\ValidatorService;
-use App\Service\CrudManager;
 use App\Plugins\Account\Entity\UserEntity;
 use App\Plugins\Account\Entity\PasswordResetTokenEntity;
 use App\Plugins\Account\Exception\AccountException;
@@ -15,29 +13,21 @@ use App\Plugins\Email\Service\EmailService;
 class PasswordResetService
 {
     private EntityManagerInterface $entityManager;
-    private UserPasswordHasherInterface $passwordHasher;
     private ValidatorService $validatorService;
     private EmailService $emailService;
-    private CrudManager $crudManager;
 
     public function __construct(
         EntityManagerInterface $entityManager,
-        UserPasswordHasherInterface $passwordHasher,
         ValidatorService $validatorService,
-        EmailService $emailService,
-        CrudManager $crudManager
+        EmailService $emailService
     ) {
         $this->entityManager = $entityManager;
-        $this->passwordHasher = $passwordHasher;
         $this->validatorService = $validatorService;
         $this->emailService = $emailService;
-        $this->crudManager = $crudManager;
     }
 
-    
     public function requestPasswordReset(array $data): void
     {
-        // Validate email
         $constraints = new Assert\Collection([
             'email' => [
                 new Assert\NotBlank(['message' => 'Email is required.']),
@@ -50,17 +40,18 @@ class PasswordResetService
             throw new AccountException(implode(' | ', $errors));
         }
 
-        // Find user by email
         $user = $this->entityManager->getRepository(UserEntity::class)->findOneBy([
             'email' => $data['email']
         ]);
 
-        // Always return success to prevent email enumeration
         if (!$user) {
             return;
         }
 
-        // Invalidate any existing tokens for this user
+        if ($user->getPassword() === null) {
+            return;
+        }
+
         $existingTokens = $this->entityManager->getRepository(PasswordResetTokenEntity::class)->findBy([
             'user' => $user,
             'used' => false
@@ -70,18 +61,17 @@ class PasswordResetService
             $token->setUsed(true);
         }
 
-        // Create new token
+        $tokenString = bin2hex(random_bytes(32));
         $token = new PasswordResetTokenEntity();
         $token->setUser($user);
-        $token->setToken(bin2hex(random_bytes(32)));
+        $token->setToken($tokenString);
         $token->setExpiresAt((new \DateTime())->modify('+1 hour'));
 
         $this->entityManager->persist($token);
         $this->entityManager->flush();
 
-        // Send email
         $resetUrl = $_ENV['APP_URL'] . '/account/reset-password?token=' . $token->getToken();
-        
+
         $this->emailService->send(
             $user->getEmail(),
             'password_reset',
@@ -96,7 +86,6 @@ class PasswordResetService
 
     public function resetPassword(array $data): void
     {
-        // Validate input
         $constraints = new Assert\Collection([
             'token' => [
                 new Assert\NotBlank(['message' => 'Token is required.']),
@@ -112,7 +101,6 @@ class PasswordResetService
             throw new AccountException(implode(' | ', $errors));
         }
 
-        // Find token
         $tokenEntity = $this->entityManager->getRepository(PasswordResetTokenEntity::class)->findOneBy([
             'token' => $data['token'],
             'used' => false
@@ -122,26 +110,29 @@ class PasswordResetService
             throw new AccountException('Invalid or expired reset token.');
         }
 
-        // Check if token is expired
         if ($tokenEntity->isExpired()) {
             $tokenEntity->setUsed(true);
             $this->entityManager->flush();
             throw new AccountException('Reset token has expired.');
         }
 
-        // Update password
         $user = $tokenEntity->getUser();
-        $hashedPassword = password_hash($data['password'], PASSWORD_DEFAULT);
         
-        $this->crudManager->update($user, [
-            'password' => $hashedPassword
-        ]);
+        if ($user->getPassword() === null) {
+            throw new AccountException('This account uses Google sign-in. Please sign in with Google instead.');
+        }
 
-        // Mark token as used
+        $hashedPassword = password_hash($data['password'], PASSWORD_DEFAULT);
+        $user->setPassword($hashedPassword);
+        $user->setUpdated(new \DateTime());
+
+        $this->entityManager->persist($user);
+        
         $tokenEntity->setUsed(true);
+        $this->entityManager->persist($tokenEntity);
+        
         $this->entityManager->flush();
 
-        // Send confirmation email
         $this->emailService->send(
             $user->getEmail(),
             'password_reset_confirmation',
@@ -160,6 +151,11 @@ class PasswordResetService
         ]);
 
         if (!$tokenEntity || $tokenEntity->isExpired()) {
+            return false;
+        }
+
+        $user = $tokenEntity->getUser();
+        if ($user->getPassword() === null) {
             return false;
         }
 

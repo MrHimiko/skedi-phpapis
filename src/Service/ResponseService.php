@@ -5,19 +5,19 @@ namespace App\Service;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Validator\ConstraintViolationList;
 use Symfony\Component\HttpFoundation\RequestStack;
-use App\Service\SlackService;
+
 
 class ResponseService
 {
-    private SlackService $slackService;
+
     private RequestStack $requestStack;
 
     public function __construct(
-        SlackService $slackService,
+   
         RequestStack $requestStack
     )
     {
-        $this->slackService = $slackService;
+    
         $this->requestStack = $requestStack;
     }
 
@@ -29,7 +29,7 @@ class ResponseService
             $message = 'An unexpected error occurred. Please contact support if the problem persists.';
             $status = 500;
 
-            $this->slackService->message($message->getMessage());
+            
         } 
         else if ($message === 'deny') 
         {
