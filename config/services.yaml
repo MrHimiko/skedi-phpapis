@@ -23,6 +23,17 @@ services:
             - '../src/Entity/'
             - '../src/Kernel.php'
 
+    # Workflow Actions Auto-discovery
+    App\Plugins\Workflows\Action\:
+        resource: '../src/Plugins/Workflows/Action/*'
+        tags: ['workflow.action']
+
+    App\Plugins\Workflows\Service\ActionRegistry:
+        arguments:
+            $actions: !tagged_iterator workflow.action
+
+            
+
     App\Plugins\Account\Listener\RequestListener:
         tags:
             - { name: kernel.event_listener, event: kernel.request, priority: 10 }

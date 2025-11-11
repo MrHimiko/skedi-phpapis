@@ -193,6 +193,16 @@ class EmailTemplateService
                 ],
                 'required_fields' => ['meeting_name', 'date', 'time']
             ],
+            [
+                'name' => 'workflow_email',
+                'provider_id' => 'workflow_email',
+                'description' => 'Generic template for workflow emails',
+                'default_data' => [
+                    'subject' => 'Notification',
+                    'content' => ''
+                ],
+                'required_fields' => ['subject', 'content']
+            ],
         ];
         
         foreach ($defaultTemplates as $templateData) {

@@ -1,5 +1,4 @@
 <?php
-// src/Plugins/Workflows/Action/SendEmailAction.php
 
 namespace App\Plugins\Workflows\Action;
 
@@ -50,12 +49,6 @@ class SendEmailAction implements ActionInterface
                 'required' => true,
                 'description' => 'Recipient email address. You can use variables like {{booking.customer_email}}'
             ],
-            'cc' => [
-                'type' => 'string',
-                'label' => 'CC Email',
-                'placeholder' => 'cc@example.com',
-                'required' => false
-            ],
             'subject' => [
                 'type' => 'string',
                 'label' => 'Subject',
@@ -68,12 +61,6 @@ class SendEmailAction implements ActionInterface
                 'placeholder' => 'Hi {{booking.customer_name}},\n\nYour booking for {{event.name}} is confirmed...',
                 'required' => true,
                 'rows' => 10
-            ],
-            'template_id' => [
-                'type' => 'select',
-                'label' => 'Email Template (optional)',
-                'options' => [], // Will be populated from email templates
-                'required' => false
             ]
         ];
     }
@@ -83,30 +70,33 @@ class SendEmailAction implements ActionInterface
         try {
             // Replace variables in config values
             $to = $this->replaceVariables($config['to'], $context);
-            $cc = !empty($config['cc']) ? $this->replaceVariables($config['cc'], $context) : null;
             $subject = $this->replaceVariables($config['subject'], $context);
             $body = $this->replaceVariables($config['body'], $context);
 
-            // Send email using the EmailService
-            $this->emailService->send(
+            // Validate email
+            if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
+                throw new \Exception('Invalid email address: ' . $to);
+            }
+
+            // Send email using EmailService
+            // Use 'workflow_email' template with subject and body in data
+            $result = $this->emailService->send(
                 $to,
-                $subject,
-                $body,
-                $cc,
-                null, // BCC
-                !empty($config['template_id']) ? $config['template_id'] : null
+                'workflow_email',
+                [
+                    'subject' => $subject,
+                    'content' => nl2br(htmlspecialchars($body))
+                ]
             );
 
             return [
                 'success' => true,
                 'email_sent_to' => $to,
-                'subject' => $subject
+                'subject' => $subject,
+                'queued' => true
             ];
         } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'error' => $e->getMessage()
-            ];
+            throw new \Exception('Failed to send email: ' . $e->getMessage());
         }
     }
 
@@ -122,22 +112,28 @@ class SendEmailAction implements ActionInterface
             $errors[] = 'Email subject is required';
         }
 
-        if (empty($config['body']) && empty($config['template_id'])) {
-            $errors[] = 'Email body or template is required';
+        if (empty($config['body'])) {
+            $errors[] = 'Email body is required';
         }
 
         return $errors;
     }
 
+    /**
+     * Replace variables in template with context values
+     */
     private function replaceVariables(string $template, array $context): string
     {
         return preg_replace_callback('/\{\{(.+?)\}\}/', function($matches) use ($context) {
             $path = trim($matches[1]);
             $value = $this->getNestedValue($context, $path);
-            return $value !== null ? $value : $matches[0];
+            return $value !== null ? (string)$value : $matches[0];
         }, $template);
     }
 
+    /**
+     * Get nested value from array using dot notation
+     */
     private function getNestedValue(array $data, string $path)
     {
         $keys = explode('.', $path);

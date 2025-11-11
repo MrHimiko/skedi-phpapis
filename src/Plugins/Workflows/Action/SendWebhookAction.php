@@ -1,5 +1,4 @@
 <?php
-// src/Plugins/Workflows/Action/SendWebhookAction.php
 
 namespace App\Plugins\Workflows\Action;
 
@@ -44,35 +43,41 @@ class SendWebhookAction implements ActionInterface
     {
         return [
             'url' => [
-                'type' => 'string',
+                'type' => 'url',
                 'label' => 'Webhook URL',
-                'placeholder' => 'https://example.com/webhook',
+                'placeholder' => 'https://api.example.com/webhook',
                 'required' => true,
                 'description' => 'The URL to send the webhook to'
             ],
             'method' => [
                 'type' => 'select',
                 'label' => 'HTTP Method',
-                'options' => ['POST', 'PUT', 'PATCH', 'GET'],
+                'options' => [
+                    ['label' => 'POST', 'value' => 'POST'],
+                    ['label' => 'PUT', 'value' => 'PUT'],
+                    ['label' => 'PATCH', 'value' => 'PATCH']
+                ],
                 'default' => 'POST',
                 'required' => true
             ],
             'headers' => [
-                'type' => 'json',
+                'type' => 'textarea',
                 'label' => 'Headers (JSON)',
-                'placeholder' => '{"Authorization": "Bearer {{api_token}}"}',
-                'description' => 'Custom headers in JSON format. You can use variables.',
-                'required' => false
+                'placeholder' => '{"Authorization": "Bearer YOUR_TOKEN"}',
+                'description' => 'Custom headers in JSON format',
+                'required' => false,
+                'rows' => 3
             ],
             'body' => [
-                'type' => 'json',
+                'type' => 'textarea',
                 'label' => 'Body (JSON)',
-                'placeholder' => '{"booking_id": "{{booking.id}}", "status": "{{booking.status}}"}',
-                'description' => 'Request body in JSON format. You can use variables.',
-                'required' => false
+                'placeholder' => '{"booking_id": "{{booking.id}}", "customer": "{{booking.customer_email}}"}',
+                'description' => 'Request body in JSON format. You can use variables like {{booking.id}}',
+                'required' => false,
+                'rows' => 8
             ],
             'timeout' => [
-                'type' => 'integer',
+                'type' => 'number',
                 'label' => 'Timeout (seconds)',
                 'default' => 30,
                 'min' => 1,
@@ -85,50 +90,76 @@ class SendWebhookAction implements ActionInterface
     public function execute(array $config, array $context): array
     {
         try {
-            // Replace variables in all config values
+            // Replace variables in URL
             $url = $this->replaceVariables($config['url'], $context);
-            $method = $config['method'] ?? 'POST';
-            $timeout = $config['timeout'] ?? 30;
             
-            // Prepare headers
-            $headers = ['Content-Type' => 'application/json'];
+            // Validate URL
+            if (!filter_var($url, FILTER_VALIDATE_URL)) {
+                throw new \Exception('Invalid webhook URL: ' . $url);
+            }
+
+            $method = strtoupper($config['method'] ?? 'POST');
+            $timeout = (int)($config['timeout'] ?? 30);
+
+            // Parse headers
+            $headers = [];
             if (!empty($config['headers'])) {
-                $customHeaders = json_decode($this->replaceVariables($config['headers'], $context), true);
-                if (is_array($customHeaders)) {
-                    $headers = array_merge($headers, $customHeaders);
+                $headersString = $this->replaceVariables($config['headers'], $context);
+                $parsedHeaders = json_decode($headersString, true);
+                
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new \Exception('Invalid JSON in headers: ' . json_last_error_msg());
                 }
+                
+                $headers = $parsedHeaders;
             }
-            
-            // Prepare body
+
+            // Parse body
             $body = null;
-            if (!empty($config['body']) && in_array($method, ['POST', 'PUT', 'PATCH'])) {
-                $body = $this->replaceVariables($config['body'], $context);
+            if (!empty($config['body'])) {
+                $bodyString = $this->replaceVariables($config['body'], $context);
+                $parsedBody = json_decode($bodyString, true);
+                
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new \Exception('Invalid JSON in body: ' . json_last_error_msg());
+                }
+                
+                $body = $parsedBody;
+            } else {
+                // If no body specified, send entire context
+                $body = $context;
             }
-            
-            // Send the webhook
+
+            // Add content-type header if not specified
+            if (!isset($headers['Content-Type'])) {
+                $headers['Content-Type'] = 'application/json';
+            }
+
+            // Send webhook
             $response = $this->httpClient->request($method, $url, [
                 'headers' => $headers,
-                'body' => $body,
+                'json' => $body,
                 'timeout' => $timeout
             ]);
-            
+
             $statusCode = $response->getStatusCode();
             $responseBody = $response->getContent(false);
-            
-            return [
-                'success' => $statusCode >= 200 && $statusCode < 300,
-                'status_code' => $statusCode,
-                'response' => json_decode($responseBody, true) ?? $responseBody,
-                'url' => $url,
-                'method' => $method
-            ];
+
+            // Consider 2xx status codes as success
+            if ($statusCode >= 200 && $statusCode < 300) {
+                return [
+                    'success' => true,
+                    'url' => $url,
+                    'method' => $method,
+                    'status_code' => $statusCode,
+                    'response' => $responseBody
+                ];
+            } else {
+                throw new \Exception('Webhook returned status code ' . $statusCode . ': ' . $responseBody);
+            }
+
         } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'error' => $e->getMessage(),
-                'url' => $url ?? $config['url'],
-                'method' => $method ?? 'POST'
-            ];
+            throw new \Exception('Failed to send webhook: ' . $e->getMessage());
         }
     }
 
@@ -138,47 +169,51 @@ class SendWebhookAction implements ActionInterface
 
         if (empty($config['url'])) {
             $errors[] = 'Webhook URL is required';
-        } elseif (!filter_var($config['url'], FILTER_VALIDATE_URL) && !preg_match('/\{\{.+?\}\}/', $config['url'])) {
-            $errors[] = 'Invalid webhook URL';
+        } elseif (!filter_var($config['url'], FILTER_VALIDATE_URL)) {
+            $errors[] = 'Invalid webhook URL format';
         }
 
+        if (!empty($config['method'])) {
+            $allowedMethods = ['POST', 'PUT', 'PATCH', 'GET'];
+            if (!in_array(strtoupper($config['method']), $allowedMethods)) {
+                $errors[] = 'Invalid HTTP method';
+            }
+        }
+
+        // Validate headers JSON
         if (!empty($config['headers'])) {
-            $headers = json_decode($config['headers'], true);
+            json_decode($config['headers']);
             if (json_last_error() !== JSON_ERROR_NONE) {
                 $errors[] = 'Headers must be valid JSON';
             }
         }
 
+        // Validate body JSON
         if (!empty($config['body'])) {
-            $testBody = preg_replace('/\{\{.+?\}\}/', '"test"', $config['body']);
-            json_decode($testBody);
+            json_decode($config['body']);
             if (json_last_error() !== JSON_ERROR_NONE) {
-                $errors[] = 'Body must be valid JSON (variables allowed)';
+                $errors[] = 'Body must be valid JSON';
             }
         }
 
         return $errors;
     }
 
+    /**
+     * Replace variables in template with context values
+     */
     private function replaceVariables(string $template, array $context): string
     {
         return preg_replace_callback('/\{\{(.+?)\}\}/', function($matches) use ($context) {
             $path = trim($matches[1]);
             $value = $this->getNestedValue($context, $path);
-            
-            if ($value === null) {
-                return $matches[0];
-            }
-            
-            // Convert non-string values to JSON
-            if (!is_string($value)) {
-                return json_encode($value);
-            }
-            
-            return $value;
+            return $value !== null ? (string)$value : $matches[0];
         }, $template);
     }
 
+    /**
+     * Get nested value from array using dot notation
+     */
     private function getNestedValue(array $data, string $path)
     {
         $keys = explode('.', $path);

@@ -17,6 +17,7 @@ use App\Plugins\Integrations\Google\Calendar\Service\GoogleCalendarService;
 use App\Plugins\Integrations\Google\Meet\Service\GoogleMeetService;
 use App\Plugins\Events\Service\BookingReminderService;
 use App\Plugins\Contacts\Service\ContactService;
+use App\Plugins\Workflows\Service\WorkflowExecutionService;
 use DateTime;
 
 class EventBookingService
@@ -29,7 +30,7 @@ class EventBookingService
     //private OutlookCalendarService $outlookCalendarService;
     private GoogleMeetService $googleMeetService;
     private BookingReminderService $reminderService;
-    
+    private WorkflowExecutionService $workflowExecutionService;
 
     public function __construct(
         CrudManager $crudManager,
@@ -40,6 +41,7 @@ class EventBookingService
         GoogleCalendarService $googleCalendarService,
         GoogleMeetService $googleMeetService,
         BookingReminderService $reminderService,
+        WorkflowExecutionService $workflowExecutionService 
         
     ) {
         $this->crudManager = $crudManager;
@@ -50,6 +52,7 @@ class EventBookingService
         //$this->outlookCalendarService = $outlookCalendarService;
         $this->googleMeetService = $googleMeetService;
         $this->reminderService = $reminderService;
+        $this->workflowExecutionService = $workflowExecutionService;
     }
 
     public function getMany(array $filters, int $page, int $limit, array $criteria = []): array
@@ -215,6 +218,13 @@ class EventBookingService
             } catch (\Exception $e) {
                 // Silently catch the exception - don't let calendar sync issues prevent booking creation
             }
+
+            // Fire workflow trigger for booking.created
+            try {
+                $this->workflowExecutionService->executeForTrigger('booking.created', $booking);
+            } catch (\Exception $e) {
+                // Silently catch - don't let workflow errors break booking creation
+            }
             
             return $booking;
         } catch (\Exception $e) {
@@ -324,6 +334,14 @@ class EventBookingService
                 // Update availability records
                 $this->scheduleService->handleBookingCancelled($booking);
                 $this->reminderService->cancelRemindersForBooking($booking);
+
+                // Fire workflow trigger for booking.cancelled
+                try {
+                    $this->workflowExecutionService->executeForTrigger('booking.cancelled', $booking);
+                } catch (\Exception $e) {
+                    // Silently catch - don't let workflow errors break cancellation
+                }
+
                 // Delete from Google Calendar
                 try {
                     // Get all assignees for this event
@@ -378,6 +396,13 @@ class EventBookingService
             
             // Update availability records
             $this->scheduleService->handleBookingCancelled($booking);
+            
+             // Fire workflow trigger for booking.cancelled
+            try {
+                $this->workflowExecutionService->executeForTrigger('booking.cancelled', $booking);
+            } catch (\Exception $e) {
+                // Silently catch - don't let workflow errors break cancellation
+            }
             
             // Delete from Google Calendar using the GoogleCalendarService
             $this->googleCalendarService->deleteGoogleEventsForBooking($booking);

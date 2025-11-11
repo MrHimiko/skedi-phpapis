@@ -8,7 +8,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 use Doctrine\ORM\EntityManagerInterface;
-
+use App\Plugins\Account\Service\GoogleAuthService;
 use App\Service\ResponseService;
 
 use App\Plugins\Account\Service\LoginService;
