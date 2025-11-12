@@ -16,9 +16,7 @@ class BookingConfirmedTemplate
         $duration = $data['duration'] ?? '30 minutes';
         $location = $data['location'] ?? 'Online';
         $meetingLink = $data['meeting_link'] ?? '';
-        $calendarLink = $data['calendar_link'] ?? '#';
-        $rescheduleLink = $data['reschedule_link'] ?? '#';
-        $cancelLink = $data['cancel_link'] ?? '#';
+        $manageLink = $data['manage_link'] ?? '#';
         $companyName = $data['company_name'] ?? '';
         $bookingId = $data['booking_id'] ?? '';
         $organizationId = $data['organization_id'] ?? '';
@@ -68,13 +66,16 @@ class BookingConfirmedTemplate
         </div>';
         
         // Action buttons
-        if ($calendarLink !== '#') {
+        if ($manageLink !== '#') {
             $html .= '
             <div class="center">
-                <a href="' . htmlspecialchars($calendarLink) . '" class="btn btn-primary">
-                    Add to Calendar
-                </a>
-            </div>';
+                <a href="' . htmlspecialchars($manageLink) . '"
+                class="button">Manage Booking</a>
+            </div>
+            
+            <p class="small center" style="margin-top: 16px; color: #666;">
+                Need to reschedule or cancel? Use the link above.
+            </p>';
         }
         
         // Secondary actions

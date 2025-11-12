@@ -344,8 +344,7 @@ class EventBookingController extends AbstractController
                 'location' => $location,
                 'meeting_link' => $meetingLink,
                 'calendar_link' => $rescheduleLink,
-                'reschedule_link' => $rescheduleLink,
-                'cancel_link' => $cancelLink,
+                'manage_link' => $frontendUrl . '/manage/' . $booking->getBookingToken(),
                 'company_name' => $organization ? $organization->getName() : '',
                 'booking_id' => $booking->getId(),
                 'organization_id' => $organization ? $organization->getId() : null
@@ -436,13 +435,16 @@ class EventBookingController extends AbstractController
             $this->sendBookingEmails($booking);
             
             $bookingData = $booking->toArray();
-            
+
+            // Add booking token for redirect
+            $bookingData['booking_token'] = $booking->getBookingToken();
+
             // Add guests
             $guests = $this->bookingService->getGuests($booking);
             $bookingData['guests'] = array_map(function($guest) {
                 return $guest->toArray();
             }, $guests);
-            
+
             return $this->responseService->json(true, 'Booking created successfully.', $bookingData, 201);
             
         } catch (EventsException $e) {

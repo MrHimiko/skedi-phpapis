@@ -36,6 +36,9 @@ class EventBookingEntity
     #[ORM\Column(name: "cancelled", type: "boolean", options: ["default" => false])]
     private bool $cancelled = false;
 
+    #[ORM\Column(name: "booking_token", type: "string", length: 64, unique: true, nullable: true)]
+    private ?string $bookingToken = null;
+
     #[ORM\Column(name: "updated", type: "datetime", nullable: false, options: ["default" => "CURRENT_TIMESTAMP"])]
     private DateTimeInterface $updated;
 
@@ -131,6 +134,18 @@ class EventBookingEntity
         $this->cancelled = $cancelled;
         return $this;
     }
+
+    public function getBookingToken(): ?string
+    {
+        return $this->bookingToken;
+    }
+
+    public function setBookingToken(?string $bookingToken): self
+    {
+        $this->bookingToken = $bookingToken;
+        return $this;
+    }
+
 
     public function getUpdated(): DateTimeInterface
     {

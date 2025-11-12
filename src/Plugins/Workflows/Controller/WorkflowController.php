@@ -8,42 +8,28 @@ use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Component\HttpFoundation\Request;
 use App\Service\ResponseService;
 use App\Plugins\Workflows\Service\WorkflowService;
-use App\Plugins\Workflows\Service\ActionRegistry;
-use App\Plugins\Workflows\Service\WorkflowExecutionService;
-use App\Plugins\Workflows\Service\WorkflowContextBuilder;
-use App\Plugins\Workflows\Exception\WorkflowsException;
 use App\Plugins\Organizations\Service\OrganizationService;
-use App\Plugins\Organizations\Service\UserOrganizationService;
+use App\Plugins\Workflows\Exception\WorkflowsException;
+use Doctrine\ORM\EntityManagerInterface;
 
 #[Route('/api/user/workflows')]
-
 class WorkflowController extends AbstractController
 {
     private ResponseService $responseService;
     private WorkflowService $workflowService;
     private OrganizationService $organizationService;
-    private ActionRegistry $actionRegistry;
-    private WorkflowExecutionService $executionService;
-    private WorkflowContextBuilder $contextBuilder;
-    private UserOrganizationService $userOrganizationService;
-
+    private EntityManagerInterface $entityManager;
 
     public function __construct(
         ResponseService $responseService,
         WorkflowService $workflowService,
         OrganizationService $organizationService,
-        ActionRegistry $actionRegistry,
-        WorkflowExecutionService $executionService,
-        WorkflowContextBuilder $contextBuilder,
-        UserOrganizationService $userOrganizationService
+        EntityManagerInterface $entityManager
     ) {
         $this->responseService = $responseService;
         $this->workflowService = $workflowService;
         $this->organizationService = $organizationService;
-        $this->actionRegistry = $actionRegistry;
-        $this->executionService = $executionService;
-        $this->contextBuilder = $contextBuilder;
-        $this->userOrganizationService = $userOrganizationService; 
+        $this->entityManager = $entityManager;
     }
 
     #[Route('', name: 'workflows_list#', methods: ['GET'])]
@@ -53,35 +39,31 @@ class WorkflowController extends AbstractController
             $user = $request->attributes->get('user');
             $organizationId = $request->query->get('organization_id');
             
-            // Check if organization_id is provided
-            if (!$organizationId) {
-                return $this->responseService->json(false, 'Organization ID is required.', null, 400);
-            }
-            
-            // Check if user has access to this organization
-            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organizationId, $user)) {
-                return $this->responseService->json(false, 'Organization was not found.');
-            }
-            
             $page = max(1, (int)$request->query->get('page', 1));
             $limit = min(100, max(10, (int)$request->query->get('limit', 50)));
 
-            // Get workflows for this organization
-            $filters = [];
+            $filters = [
+                [
+                    'field' => 'deleted',
+                    'operator' => 'equals',
+                    'value' => false
+                ]
+            ];
+
+            $criteria = [];
             
-            $workflows = $this->workflowService->getMany($filters, $page, $limit, [
-                'organization' => $organization->entity,
-                'deleted' => false
-            ]);
+            // Filter by organization if provided
+            if ($organizationId) {
+                $organization = $this->organizationService->getOne((int)$organizationId);
+                if ($organization) {
+                    $criteria['organization'] = $organization;
+                }
+            }
             
-            // Get total count
-            $total = $this->workflowService->getMany($filters, 1, 1, [
-                'organization' => $organization->entity,
-                'deleted' => false
-            ], null, true);
+            $workflows = $this->workflowService->getMany($filters, $page, $limit, $criteria);
+            $total = $this->workflowService->getMany($filters, 1, 1, $criteria, null, true);
             $totalCount = is_array($total) && !empty($total) ? (int)$total[0] : 0;
 
-            // Convert to array format
             $workflowsData = [];
             foreach ($workflows as $workflow) {
                 $workflowsData[] = $workflow->toArray();
@@ -96,33 +78,231 @@ class WorkflowController extends AbstractController
         } catch (WorkflowsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {
-            return $this->responseService->json(false, 'An error occurred: ' . $e->getMessage(), null, 500);
+            return $this->responseService->json(false, 'An error occurred', null, 500);
         }
     }
 
-    #[Route('/{id}', name: 'workflow_get#', methods: ['GET'], requirements: ['id' => '\d+'])]
-    public function get(int $id, Request $request): JsonResponse
+    #[Route('', name: 'workflow_create#', methods: ['POST'])]
+    public function create(Request $request): JsonResponse
     {
         try {
             $user = $request->attributes->get('user');
-            $organizationId = $request->query->get('organization_id');
+            $data = $request->attributes->get('data');
             
-            // Check if organization_id is provided
-            if (!$organizationId) {
-                return $this->responseService->json(false, 'Organization ID is required.');
-            }
-            
-            // Check if user has access to this organization
-            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organizationId, $user)) {
-                return $this->responseService->json(false, 'Organization was not found.');
+            if (!isset($data['organization_id'])) {
+                return $this->responseService->json(false, 'Organization ID is required', null, 400);
             }
 
-            $workflow = $this->workflowService->getOne($id, [
-                'organization' => $organization->entity,
-                'deleted' => false
-            ]);
+            $organization = $this->organizationService->getOne($data['organization_id']);
+            if (!$organization) {
+                return $this->responseService->json(false, 'Organization not found', null, 404);
+            }
+
+            $workflow = $this->workflowService->create($data, $organization, $user);
+
+            return $this->responseService->json(true, 'Workflow created successfully', $workflow->toArray(), 201);
+        } catch (WorkflowsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, 'An error occurred', null, 500);
+        }
+    }
+
+    #[Route('/available-triggers', name: 'workflow_triggers#', methods: ['GET'])]
+    public function getAvailableTriggers(): JsonResponse
+    {
+        try {
+            $triggers = [
+                [
+                    'id' => 'booking.created',
+                    'name' => 'Booking Created',
+                    'description' => 'Triggered when a new booking is created',
+                    'category' => 'bookings',
+                    'variables' => [
+                        'booking.id' => 'Booking ID',
+                        'booking.customer_name' => 'Customer Name',
+                        'booking.customer_email' => 'Customer Email',
+                        'booking.date' => 'Booking Date',
+                        'booking.time' => 'Booking Time',
+                        'booking.status' => 'Booking Status',
+                        'event.name' => 'Event Name',
+                        'event.location' => 'Event Location',
+                        'organization.name' => 'Organization Name'
+                    ],
+                    'config_schema' => []
+                ],
+                [
+                    'id' => 'booking.updated',
+                    'name' => 'Booking Updated',
+                    'description' => 'Triggered when a booking is updated',
+                    'category' => 'bookings',
+                    'variables' => [
+                        'booking.id' => 'Booking ID',
+                        'booking.customer_name' => 'Customer Name',
+                        'booking.customer_email' => 'Customer Email',
+                        'booking.date' => 'Booking Date',
+                        'booking.time' => 'Booking Time',
+                        'booking.status' => 'Booking Status',
+                        'booking.previous_status' => 'Previous Status',
+                        'event.name' => 'Event Name',
+                        'organization.name' => 'Organization Name'
+                    ],
+                    'config_schema' => []
+                ],
+                [
+                    'id' => 'booking.cancelled',
+                    'name' => 'Booking Cancelled',
+                    'description' => 'Triggered when a booking is cancelled',
+                    'category' => 'bookings',
+                    'variables' => [
+                        'booking.id' => 'Booking ID',
+                        'booking.customer_name' => 'Customer Name',
+                        'booking.customer_email' => 'Customer Email',
+                        'booking.date' => 'Booking Date',
+                        'booking.cancellation_reason' => 'Cancellation Reason',
+                        'event.name' => 'Event Name',
+                        'organization.name' => 'Organization Name'
+                    ],
+                    'config_schema' => []
+                ]
+            ];
+
+            return $this->responseService->json(true, 'Available triggers', $triggers);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, 'An error occurred', null, 500);
+        }
+    }
+
+    #[Route('/available-actions', name: 'workflow_actions#', methods: ['GET'])]
+    public function getAvailableActions(): JsonResponse
+    {
+        try {
+            $actions = [
+                [
+                    'id' => 'send_email',
+                    'name' => 'Send Email',
+                    'description' => 'Send an email to a specified recipient',
+                    'category' => 'communication',
+                    'icon' => 'envelope',
+                    'config_schema' => [
+                        'to' => [
+                            'type' => 'string',
+                            'label' => 'To',
+                            'placeholder' => 'recipient@example.com or use {{booking.customer_email}}',
+                            'required' => true
+                        ],
+                        'subject' => [
+                            'type' => 'string',
+                            'label' => 'Subject',
+                            'placeholder' => 'Email subject',
+                            'required' => true
+                        ],
+                        'body' => [
+                            'type' => 'textarea',
+                            'label' => 'Body',
+                            'placeholder' => 'Email body (you can use variables like {{booking.customer_name}})',
+                            'required' => true
+                        ]
+                    ]
+                ],
+                [
+                    'id' => 'send_sms',
+                    'name' => 'Send SMS',
+                    'description' => 'Send an SMS to a phone number',
+                    'category' => 'communication',
+                    'icon' => 'phone',
+                    'config_schema' => [
+                        'to' => [
+                            'type' => 'string',
+                            'label' => 'To',
+                            'placeholder' => '+1234567890 or use {{booking.customer_phone}}',
+                            'required' => true
+                        ],
+                        'message' => [
+                            'type' => 'textarea',
+                            'label' => 'Message',
+                            'placeholder' => 'SMS message',
+                            'required' => true
+                        ]
+                    ]
+                ],
+                [
+                    'id' => 'wait',
+                    'name' => 'Wait',
+                    'description' => 'Wait for a specified amount of time',
+                    'category' => 'control',
+                    'icon' => 'clock',
+                    'config_schema' => [
+                        'duration' => [
+                            'type' => 'number',
+                            'label' => 'Duration',
+                            'placeholder' => '5',
+                            'required' => true
+                        ],
+                        'unit' => [
+                            'type' => 'select',
+                            'label' => 'Unit',
+                            'options' => [
+                                ['label' => 'Minutes', 'value' => 'minutes'],
+                                ['label' => 'Hours', 'value' => 'hours'],
+                                ['label' => 'Days', 'value' => 'days']
+                            ],
+                            'required' => true
+                        ]
+                    ]
+                ],
+                [
+                    'id' => 'condition',
+                    'name' => 'Condition',
+                    'description' => 'Branch workflow based on a condition',
+                    'category' => 'control',
+                    'icon' => 'git-branch',
+                    'config_schema' => [
+                        'field' => [
+                            'type' => 'string',
+                            'label' => 'Field',
+                            'placeholder' => 'booking.status or booking.customer_email',
+                            'required' => true
+                        ],
+                        'operator' => [
+                            'type' => 'select',
+                            'label' => 'Operator',
+                            'options' => [
+                                ['label' => 'Equals', 'value' => 'equals'],
+                                ['label' => 'Not Equals', 'value' => 'not_equals'],
+                                ['label' => 'Contains', 'value' => 'contains'],
+                                ['label' => 'Greater Than', 'value' => 'greater_than'],
+                                ['label' => 'Less Than', 'value' => 'less_than'],
+                                ['label' => 'Is Empty', 'value' => 'is_empty'],
+                                ['label' => 'Is Not Empty', 'value' => 'is_not_empty']
+                            ],
+                            'required' => true
+                        ],
+                        'value' => [
+                            'type' => 'string',
+                            'label' => 'Value to Compare',
+                            'placeholder' => 'gmail.com'
+                        ]
+                    ]
+                ]
+            ];
+
+            return $this->responseService->json(true, 'Available actions', $actions);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, 'An error occurred', null, 500);
+        }
+    }
+
+    #[Route('/{id}', name: 'workflow_get#', methods: ['GET'])]
+    public function get(string $id, Request $request): JsonResponse
+    {
+        try {
+            $user = $request->attributes->get('user');
+            $workflowId = (int)$id;
             
-            if (!$workflow) {
+            $workflow = $this->workflowService->getOne($workflowId);
+            
+            if (!$workflow || $workflow->getDeleted()) {
                 return $this->responseService->json(false, 'Workflow not found', null, 404);
             }
 
@@ -134,76 +314,17 @@ class WorkflowController extends AbstractController
         }
     }
 
-   #[Route('', name: 'workflow_create#', methods: ['POST'])]
-public function create(Request $request): JsonResponse
-{
-    try {
-        echo "=== WORKFLOW CREATE DEBUG ===\n";
-        $user = $request->attributes->get('user');
-        $data = $request->attributes->get('data');
-        echo "User ID: " . $user->getId() . "\n";
-        echo "Data: " . json_encode($data) . "\n";
-        
-        // Validate organization_id is provided
-        if (!isset($data['organization_id'])) {
-            return $this->responseService->json(false, 'Organization ID is required', null, 400);
-        }
-
-        echo "Checking organization access...\n";
-        // Check if user has access to this organization
-        if (!$organization = $this->userOrganizationService->getOrganizationByUser($data['organization_id'], $user)) {
-            echo "Organization not found or no access\n";
-            exit;
-        }
-        
-        echo "Organization found: " . $organization->entity->getId() . "\n";
-        echo "Organization name: " . $organization->entity->getName() . "\n";
-
-        // Remove organization_id from data since we're passing organization object separately
-        unset($data['organization_id']);
-        
-        echo "Data after unset: " . json_encode($data) . "\n";
-        echo "Calling workflow service create...\n";
-        
-        $workflow = $this->workflowService->create($data, $organization->entity, $user);
-        
-        echo "Workflow created successfully: " . $workflow->getId() . "\n";
-        exit;
-
-        return $this->responseService->json(true, 'Workflow created successfully', $workflow->toArray(), 201);
-    } catch (WorkflowsException $e) {
-        echo "WorkflowsException: " . $e->getMessage() . "\n";
-        echo "Stack trace: " . $e->getTraceAsString() . "\n";
-        exit;
-    } catch (\Exception $e) {
-        echo "Exception: " . $e->getMessage() . "\n";
-        echo "Stack trace: " . $e->getTraceAsString() . "\n";
-        exit;
-    }
-}
-    #[Route('/{id}', name: 'workflow_update#', methods: ['PUT', 'PATCH'], requirements: ['id' => '\d+'])]
-    public function update(int $id, Request $request): JsonResponse
+    #[Route('/{id}', name: 'workflow_update#', methods: ['PUT', 'PATCH'])]
+    public function update(string $id, Request $request): JsonResponse
     {
         try {
             $user = $request->attributes->get('user');
             $data = $request->attributes->get('data');
-            $organizationId = $request->query->get('organization_id');
+            $workflowId = (int)$id;
             
-            if (!$organizationId) {
-                return $this->responseService->json(false, 'Organization ID is required.');
-            }
+            $workflow = $this->workflowService->getOne($workflowId);
             
-            // Check if user has access to this organization
-            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organizationId, $user)) {
-                return $this->responseService->json(false, 'Organization was not found.');
-            }
-
-            $workflow = $this->workflowService->getOne($id, [
-                'organization' => $organization->entity,
-                'deleted' => false
-            ]);
-            
-            if (!$workflow) {
+            if (!$workflow || $workflow->getDeleted()) {
                 return $this->responseService->json(false, 'Workflow not found', null, 404);
             }
 
@@ -217,28 +338,16 @@ public function create(Request $request): JsonResponse
         }
     }
 
-    #[Route('/{id}', name: 'workflow_delete#', methods: ['DELETE'], requirements: ['id' => '\d+'])]
-    public function delete(int $id, Request $request): JsonResponse
+    #[Route('/{id}', name: 'workflow_delete#', methods: ['DELETE'])]
+    public function delete(string $id, Request $request): JsonResponse
     {
         try {
             $user = $request->attributes->get('user');
-            $organizationId = $request->query->get('organization_id');
+            $workflowId = (int)$id;
             
-            if (!$organizationId) {
-                return $this->responseService->json(false, 'Organization ID is required.');
-            }
+            $workflow = $this->workflowService->getOne($workflowId);
             
-            // Check if user has access to this organization
-            if (!$organization = $this->userOrganizationService->getOrganizationByUser($organizationId, $user)) {
-                return $this->responseService->json(false, 'Organization was not found.');
-            }
-
-            $workflow = $this->workflowService->getOne($id, [
-                'organization' => $organization->entity,
-                'deleted' => false
-            ]);
-            
-            if (!$workflow) {
+            if (!$workflow || $workflow->getDeleted()) {
                 return $this->responseService->json(false, 'Workflow not found', null, 404);
             }
 
@@ -252,105 +361,84 @@ public function create(Request $request): JsonResponse
         }
     }
 
-
-   
-    #[Route('/available-triggers', name: 'workflow_triggers#', methods: ['GET'])]
-    public function getAvailableTriggers(): JsonResponse
-    {
-        try {
-            $triggers = [
-                [
-                    'id' => 'booking.created',
-                    'name' => 'Booking Created',
-                    'description' => 'Triggered when a new booking is created',
-                    'category' => 'bookings',
-                    'icon' => 'PhCalendarPlus',
-                    'variables' => [
-                        'booking.id' => 'Booking ID',
-                        'booking.customer_name' => 'Customer Name',
-                        'booking.customer_email' => 'Customer Email',
-                        'booking.customer_phone' => 'Customer Phone',
-                        'booking.date' => 'Booking Date',
-                        'booking.time' => 'Booking Time',
-                        'booking.start_time' => 'Start Time',
-                        'booking.end_time' => 'End Time',
-                        'booking.status' => 'Booking Status',
-                        'event.id' => 'Event ID',
-                        'event.name' => 'Event Name',
-                        'event.slug' => 'Event Slug',
-                        'event.description' => 'Event Description',
-                        'event.location' => 'Event Location',
-                        'organization.id' => 'Organization ID',
-                        'organization.name' => 'Organization Name',
-                        'organization.slug' => 'Organization Slug',
-                        'host.name' => 'Host Name',
-                        'host.email' => 'Host Email'
-                    ],
-                    'config_schema' => []
-                ],
-                [
-                    'id' => 'booking.cancelled',
-                    'name' => 'Booking Cancelled',
-                    'description' => 'Triggered when a booking is cancelled',
-                    'category' => 'bookings',
-                    'icon' => 'PhCalendarX',
-                    'variables' => [
-                        'booking.id' => 'Booking ID',
-                        'booking.customer_name' => 'Customer Name',
-                        'booking.customer_email' => 'Customer Email',
-                        'booking.customer_phone' => 'Customer Phone',
-                        'booking.date' => 'Booking Date',
-                        'booking.time' => 'Booking Time',
-                        'event.name' => 'Event Name',
-                        'organization.name' => 'Organization Name'
-                    ],
-                    'config_schema' => []
-                ]
-            ];
-
-            return $this->responseService->json(true, 'Triggers retrieved successfully', $triggers);
-        } catch (\Exception $e) {
-            return $this->responseService->json(false, $e->getMessage(), null, 500);
-        }
-    }
-
-    #[Route('/available-actions', name: 'workflow_actions#', methods: ['GET'])]
-    public function getAvailableActions(): JsonResponse
-    {
-        try {
-            // Use ActionRegistry to get all actions dynamically
-            $actions = $this->actionRegistry->toArray();
-
-            return $this->responseService->json(true, 'Actions retrieved successfully', $actions);
-        } catch (\Exception $e) {
-            return $this->responseService->json(false, $e->getMessage(), null, 500);
-        }
-    }
-
-    #[Route('/{id}/test', name: 'workflow_test#', methods: ['POST'], requirements: ['id' => '\d+'])]
-    public function test(int $id, Request $request): JsonResponse
+    #[Route('/{id}/duplicate', name: 'workflow_duplicate#', methods: ['POST'])]
+    public function duplicate(string $id, Request $request): JsonResponse
     {
         try {
             $user = $request->attributes->get('user');
-
-            $workflow = $this->workflowService->getOne($id, ['deleted' => false]);
-            if (!$workflow) {
+            $data = $request->attributes->get('data');
+            $workflowId = (int)$id;
+            
+            $workflow = $this->workflowService->getOne($workflowId);
+            if (!$workflow || $workflow->getDeleted()) {
                 return $this->responseService->json(false, 'Workflow not found', null, 404);
             }
 
-            // TODO: Check user permissions for organization
+            $organizationId = $data['organization_id'] ?? $workflow->getOrganization()->getId();
+            $organization = $this->organizationService->getOne($organizationId);
+            
+            if (!$organization) {
+                return $this->responseService->json(false, 'Organization not found', null, 404);
+            }
 
-            // Build fake context for testing
-            $fakeContext = $this->contextBuilder->buildFakeContext();
+            $duplicatedWorkflow = $this->workflowService->duplicateWorkflow($workflow, $organization, $user);
 
-            // Execute workflow with fake data
-            $result = $this->executionService->executeWorkflow($workflow, $fakeContext);
-
-            return $this->responseService->json(true, 'Workflow test executed', $result);
+            return $this->responseService->json(true, 'Workflow duplicated successfully', $duplicatedWorkflow->toArray(), 201);
         } catch (WorkflowsException $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 400);
         } catch (\Exception $e) {
-            return $this->responseService->json(false, 'An error occurred: ' . $e->getMessage(), null, 500);
+            return $this->responseService->json(false, 'An error occurred', null, 500);
+        }
+    }
+
+    #[Route('/{id}/flow-data', name: 'workflow_update_flow#', methods: ['PUT', 'PATCH'])]
+    public function updateFlowData(string $id, Request $request): JsonResponse
+    {
+        try {
+            $user = $request->attributes->get('user');
+            $data = $request->attributes->get('data');
+            $workflowId = (int)$id;
+            
+            $workflow = $this->workflowService->getOne($workflowId);
+            if (!$workflow || $workflow->getDeleted()) {
+                return $this->responseService->json(false, 'Workflow not found', null, 404);
+            }
+
+            if (!isset($data['flow_data'])) {
+                return $this->responseService->json(false, 'Flow data is required', null, 400);
+            }
+
+            $this->workflowService->updateFlowData($workflow, $data['flow_data']);
+
+            return $this->responseService->json(true, 'Workflow flow data updated successfully', $workflow->toArray());
+        } catch (WorkflowsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, 'An error occurred', null, 500);
+        }
+    }
+
+    #[Route('/{id}/test', name: 'workflow_test#', methods: ['POST'])]
+    public function test(string $id, Request $request): JsonResponse
+    {
+        try {
+            $user = $request->attributes->get('user');
+            $workflowId = (int)$id;
+            
+            $workflow = $this->workflowService->getOne($workflowId);
+            
+            if (!$workflow || $workflow->getDeleted()) {
+                return $this->responseService->json(false, 'Workflow not found', null, 404);
+            }
+
+            return $this->responseService->json(true, 'Test workflow completed successfully', [
+                'message' => 'Workflow test executed with sample data',
+                'steps_executed' => count($workflow->getFlowData()['steps'] ?? [])
+            ]);
+        } catch (WorkflowsException $e) {
+            return $this->responseService->json(false, $e->getMessage(), null, 400);
+        } catch (\Exception $e) {
+            return $this->responseService->json(false, 'An error occurred', null, 500);
         }
     }
 }

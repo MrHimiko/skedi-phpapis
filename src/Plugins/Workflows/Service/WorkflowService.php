@@ -52,9 +52,19 @@ class WorkflowService
                 $data['flow_data'] = [];
             }
 
+            // Convert snake_case to camelCase for CrudManager
+            $convertedData = [
+                'name' => $data['name'] ?? null,
+                'description' => $data['description'] ?? null,
+                'triggerType' => $data['trigger_type'] ?? null,
+                'triggerConfig' => $data['trigger_config'] ?? [],
+                'flowData' => $data['flow_data'] ?? [],
+                'status' => $data['status'] ?? 'draft',
+            ];
+
             $this->crudManager->create(
                 $workflow,
-                $data,
+                $convertedData,
                 [
                     'name' => [
                         new Assert\NotBlank(),
@@ -64,14 +74,14 @@ class WorkflowService
                     'description' => new Assert\Optional([
                         new Assert\Type('string'),
                     ]),
-                    'trigger_type' => [
+                    'triggerType' => [
                         new Assert\NotBlank(),
                         new Assert\Type('string'),
                     ],
-                    'trigger_config' => new Assert\Optional([
+                    'triggerConfig' => new Assert\Optional([
                         new Assert\Type('array'),
                     ]),
-                    'flow_data' => new Assert\Optional([
+                    'flowData' => new Assert\Optional([
                         new Assert\Type('array'),
                     ]),
                     'status' => new Assert\Optional([
@@ -89,9 +99,31 @@ class WorkflowService
     public function update(WorkflowEntity $workflow, array $data): void
     {
         try {
+            // Convert snake_case to camelCase for CrudManager
+            $convertedData = [];
+            
+            if (isset($data['name'])) {
+                $convertedData['name'] = $data['name'];
+            }
+            if (isset($data['description'])) {
+                $convertedData['description'] = $data['description'];
+            }
+            if (isset($data['trigger_type'])) {
+                $convertedData['triggerType'] = $data['trigger_type'];
+            }
+            if (isset($data['trigger_config'])) {
+                $convertedData['triggerConfig'] = $data['trigger_config'];
+            }
+            if (isset($data['flow_data'])) {
+                $convertedData['flowData'] = $data['flow_data'];
+            }
+            if (isset($data['status'])) {
+                $convertedData['status'] = $data['status'];
+            }
+
             $this->crudManager->update(
                 $workflow,
-                $data,
+                $convertedData,
                 [
                     'name' => new Assert\Optional([
                         new Assert\Type('string'),
@@ -100,13 +132,13 @@ class WorkflowService
                     'description' => new Assert\Optional([
                         new Assert\Type('string'),
                     ]),
-                    'trigger_type' => new Assert\Optional([
+                    'triggerType' => new Assert\Optional([
                         new Assert\Type('string'),
                     ]),
-                    'trigger_config' => new Assert\Optional([
+                    'triggerConfig' => new Assert\Optional([
                         new Assert\Type('array'),
                     ]),
-                    'flow_data' => new Assert\Optional([
+                    'flowData' => new Assert\Optional([
                         new Assert\Type('array'),
                     ]),
                     'status' => new Assert\Optional([

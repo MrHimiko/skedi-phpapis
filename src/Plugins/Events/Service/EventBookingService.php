@@ -129,6 +129,9 @@ class EventBookingService
             } else {
                 $booking->setStatus('confirmed');
             }
+
+            $booking->setBookingToken(bin2hex(random_bytes(32)));
+
                         
             // Parse form_data if it's a string
             if (!empty($data['form_data'])) {
