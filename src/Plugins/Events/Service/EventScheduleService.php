@@ -306,6 +306,9 @@ class EventScheduleService
     /**
      * Get base available time slots without checking host availability
      */
+    /**
+     * Get base available time slots without checking host availability
+     */
     private function getBaseAvailableTimeSlots(
         EventEntity $event, 
         DateTimeInterface $date, 
@@ -332,12 +335,6 @@ class EventScheduleService
             $durationMinutes = isset($durations[0]['duration']) ? (int)$durations[0]['duration'] : 30;
         }
 
-        // Get current UTC time for filtering
-        $currentUtcTime = new \DateTime('now', new \DateTimeZone('UTC'));
-        
-        // Get advance notice from event
-        $advanceNoticeMinutes = $event->getAdvanceNoticeMinutes();
-        
         // Create client date objects for the requested date
         $clientDate = clone $date;
         if ($date->getTimezone()->getName() !== $clientTimezone) {
@@ -358,33 +355,24 @@ class EventScheduleService
         $utcEndOfClientDay = clone $clientEndOfDay;
         $utcEndOfClientDay->setTimezone(new \DateTimeZone('UTC'));
         
-        // Check if the requested date is TODAY in the client's timezone
-        $clientNow = new \DateTime('now', new \DateTimeZone($clientTimezone));
-        $isToday = $clientDate->format('Y-m-d') === $clientNow->format('Y-m-d');
-        
-        // Calculate minimum booking time for today (current time + advance notice)
-        $minimumBookingTimeUtc = null;
-        if ($isToday) {
-            $minimumBookingTimeUtc = clone $currentUtcTime;
-            $minimumBookingTimeUtc->add(new \DateInterval('PT' . $advanceNoticeMinutes . 'M'));
-        }
-        
-        // Get dates that need to be checked in UTC (could span up to 2 days)
+        // We need to check UTC days that might contribute to the requested client day
+        // This could include the day before, the day itself, and potentially the day after
         $datesToCheck = [];
         
-        // Get the day of the week for the start date in UTC
+        // Start checking from 1 day before to account for timezones
         $currentDayCheck = clone $utcStartOfClientDay;
-        $currentDayCheck->setTime(0, 0, 0); // Reset to start of the UTC day
+        $currentDayCheck->setTime(0, 0, 0);
+        $currentDayCheck->modify('-1 day'); // Start from previous day
         
-        // Add the full UTC days that intersect with the client's requested day
-        while ($currentDayCheck <= $utcEndOfClientDay) {
+        // Check 3 days total (previous, current, next) to cover all timezone scenarios
+        for ($i = 0; $i < 3; $i++) {
             $datesToCheck[] = clone $currentDayCheck;
             $currentDayCheck->modify('+1 day');
         }
         
         $allSlots = [];
         
-        // Process each UTC day that overlaps with the requested client day
+        // Process each UTC day that could contribute slots to the requested client day
         foreach ($datesToCheck as $utcDayToCheck) {
             $dayOfWeek = strtolower($utcDayToCheck->format('l'));
             $schedule = $this->getScheduleForEvent($event);
@@ -403,6 +391,12 @@ class EventScheduleService
             list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['end_time']);
             $scheduleEndTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
             
+            // MIDNIGHT CROSSOVER FIX: If start_time > end_time, it means availability crosses midnight
+            if ($schedule[$dayOfWeek]['start_time'] > $schedule[$dayOfWeek]['end_time']) {
+                // Add 1 day to end time since it's on the next day
+                $scheduleEndTime->modify('+1 day');
+            }
+            
             // Convert breaks to DateTime objects
             $breaks = [];
             foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
@@ -414,14 +408,27 @@ class EventScheduleService
                 list($hours, $minutes, $seconds) = explode(':', $break['end_time']);
                 $breakEnd->setTime((int)$hours, (int)$minutes, (int)$seconds);
                 
+                // Handle midnight crossover for breaks as well
+                if ($break['start_time'] > $break['end_time']) {
+                    $breakEnd->modify('+1 day');
+                }
+                
                 $breaks[] = [
                     'start' => $breakStart,
                     'end' => $breakEnd
                 ];
             }
             
-            // Get existing bookings for this UTC day using direct query
+            // Get existing bookings for this UTC day and the next day (for crossover)
             $existingBookings = $this->getEventBookingsForDate($event, $utcDayToCheck);
+            
+            // Also get bookings from next day if schedule crosses midnight
+            if ($schedule[$dayOfWeek]['start_time'] > $schedule[$dayOfWeek]['end_time']) {
+                $nextDay = clone $utcDayToCheck;
+                $nextDay->modify('+1 day');
+                $nextDayBookings = $this->getEventBookingsForDate($event, $nextDay);
+                $existingBookings = array_merge($existingBookings, $nextDayBookings);
+            }
             
             // Generate time slots in 15-minute increments
             $slotStart = clone $scheduleStartTime;
@@ -437,12 +444,6 @@ class EventScheduleService
                     break;
                 }
                 
-                // NEW: Filter out past times and advance notice violations for TODAY only
-                if ($isToday && $minimumBookingTimeUtc && $slotStart < $minimumBookingTimeUtc) {
-                    $slotStart->add($slotIncrement);
-                    continue;
-                }
-                
                 // Check for conflicts
                 $hasConflict = false;
                 
@@ -454,19 +455,15 @@ class EventScheduleService
                     }
                 }
                 
-                // Check bookings WITH BUFFER TIME (in minutes) - BOTH before and after existing bookings
+                // Check bookings WITH BUFFER TIME (in minutes)
                 if (!$hasConflict) {
                     foreach ($existingBookings as $booking) {
-                        // Apply buffer time AFTER the booking ends (existing logic)
+                        // Apply buffer time: extend the busy period AFTER the booking ends
                         $busyUntil = clone $booking['end'];
-                        $busyUntil->add(new \DateInterval('PT' . $bufferMinutes . 'M'));
+                        $busyUntil->add(new \DateInterval('PT' . $bufferMinutes . 'M')); // Add buffer minutes
                         
-                        // Apply buffer time BEFORE the booking starts (new logic)
-                        $busyFrom = clone $booking['start'];
-                        $busyFrom->sub(new \DateInterval('PT' . $bufferMinutes . 'M'));
-                        
-                        // Check if new slot conflicts with booking OR its buffer periods (before AND after)
-                        if ($slotStart < $busyUntil && $slotEnd > $busyFrom) {
+                        // Check if new slot conflicts with booking OR its buffer period
+                        if ($slotStart < $busyUntil && $slotEnd > $booking['start']) {
                             $hasConflict = true;
                             break;
                         }
@@ -481,7 +478,8 @@ class EventScheduleService
                     $clientSlotEnd = clone $slotEnd;
                     $clientSlotEnd->setTimezone(new \DateTimeZone($clientTimezone));
                     
-                    // Check if this slot's START time falls within the requested client day
+                    // Only show slots where the START time is on the requested client day
+                    // This gives a cleaner UX - users navigate to the day to see slots that start on that day
                     if ($clientSlotStart->format('Y-m-d') === $clientDate->format('Y-m-d')) {
                         $allSlots[] = [
                             'start' => $slotStart->format('Y-m-d H:i:s'),
@@ -497,6 +495,31 @@ class EventScheduleService
                 $slotStart->add($slotIncrement);
             }
         }
+        
+        // FILTER PAST TIMES + ADVANCE NOTICE
+        // Get current time in client timezone
+        $now = new \DateTime('now', new \DateTimeZone($clientTimezone));
+        
+        // Get advance notice in minutes (check if event has this property, default to 0)
+        $advanceNoticeMinutes = 0;
+        if (method_exists($event, 'getAdvanceNotice')) {
+            $advanceNoticeMinutes = $event->getAdvanceNotice() ?? 0;
+        }
+        
+        // Calculate minimum booking time = now + advance notice
+        $minimumBookingTime = clone $now;
+        if ($advanceNoticeMinutes > 0) {
+            $minimumBookingTime->add(new \DateInterval('PT' . $advanceNoticeMinutes . 'M'));
+        }
+        
+        // Filter out slots that are in the past or within advance notice period
+        $allSlots = array_filter($allSlots, function($slot) use ($minimumBookingTime, $clientTimezone) {
+            $slotStartClient = new \DateTime($slot['start_client'], new \DateTimeZone($clientTimezone));
+            return $slotStartClient >= $minimumBookingTime;
+        });
+        
+        // Re-index array after filtering
+        $allSlots = array_values($allSlots);
         
         return $allSlots;
     }

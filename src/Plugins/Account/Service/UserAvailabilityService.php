@@ -100,6 +100,10 @@ class UserAvailabilityService
     /**
      * Check if a user is available at a specific time
      */
+    /**
+     * Check if a user is available at a specific time
+     * NOW ACCOUNTS FOR BUFFER TIME IN BOTH DIRECTIONS (BEFORE AND AFTER)
+     */
     public function isUserAvailable(
         UserEntity $user, 
         \DateTimeInterface $startTime, 
@@ -107,21 +111,22 @@ class UserAvailabilityService
         ?int $excludeId = null
     ): bool {
         try {
+            // We need to check conflicts in a wider time range because of buffer times
+            // A meeting at 16:00 with 30min buffer means we need to be free from 15:30-16:30
+            // So we need to look for conflicts that might affect our requested slot
+            
             $conflicts = $this->crudManager->findMany(
                 UserAvailabilityEntity::class,
                 [],
                 1,
-                10, // We only need to know if any exist
+                100,
                 [
                     'user' => $user,
                     'deleted' => false
                 ],
                 function($queryBuilder) use ($startTime, $endTime, $excludeId) {
-                    $queryBuilder->andWhere('t1.startTime < :endTime')
-                        ->andWhere('t1.endTime > :startTime')
-                        ->andWhere('t1.status != :cancelledStatus')
-                        ->setParameter('startTime', $startTime)
-                        ->setParameter('endTime', $endTime)
+                    // Don't filter by time here - we'll check manually with buffer
+                    $queryBuilder->andWhere('t1.status != :cancelledStatus')
                         ->setParameter('cancelledStatus', 'cancelled');
                     
                     if ($excludeId) {
@@ -131,7 +136,41 @@ class UserAvailabilityService
                 }
             );
             
-            return count($conflicts) === 0;
+            // Check each conflict considering buffer time from the event in BOTH directions
+            foreach ($conflicts as $conflict) {
+                $conflictStart = $conflict->getStartTime();
+                $conflictEnd = $conflict->getEndTime();
+                
+                // Get buffer time from the event (if this conflict is from an event booking)
+                $bufferMinutes = 0;
+                $event = $conflict->getEvent();
+                if ($event) {
+                    $bufferMinutes = $event->getBufferTime(); // Buffer time in minutes
+                }
+                
+                // Calculate the full blocked period INCLUDING buffer time in both directions
+                // BEFORE the meeting: need buffer time for preparation
+                $blockedStart = clone $conflictStart;
+                if ($bufferMinutes > 0) {
+                    $blockedStart->sub(new \DateInterval('PT' . $bufferMinutes . 'M'));
+                }
+                
+                // AFTER the meeting: need buffer time for wrap-up
+                $blockedEnd = clone $conflictEnd;
+                if ($bufferMinutes > 0) {
+                    $blockedEnd->add(new \DateInterval('PT' . $bufferMinutes . 'M'));
+                }
+                
+                // Check if requested slot overlaps with the fully blocked period
+                // Overlap occurs if: slot starts before blocked period ends AND slot ends after blocked period starts
+                if ($startTime < $blockedEnd && $endTime > $blockedStart) {
+                    return false; // User is NOT available - conflicts with buffer zone
+                }
+            }
+            
+            // No conflicts found (considering buffer times in both directions)
+            return true;
+            
         } catch (\Exception $e) {
             throw new AccountException('Failed to check availability: ' . $e->getMessage());
         }
