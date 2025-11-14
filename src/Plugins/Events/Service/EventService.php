@@ -254,6 +254,19 @@ class EventService
                     new Assert\Type('integer'),
                     new Assert\Range(['min' => 0, 'max' => 1440]) // 0 to 24 hours in minutes
                 ]),
+
+                'routingEnabled' => new Assert\Optional([
+                    new Assert\Type('boolean')
+                ]),
+                'routingInstructions' => new Assert\Optional([
+                    new Assert\Type('string')
+                ]),
+                'routingFallback' => new Assert\Optional([
+                    new Assert\Choice([
+                        'choices' => ['round_robin', 'least_busy', 'random', 'first_available'],
+                        'message' => 'Invalid routing fallback method'
+                    ])
+                ])
                 
             ];
             
@@ -271,6 +284,16 @@ class EventService
                     }
                     return null;
                 },
+                'routing_enabled' => function($value) {
+                    return (bool) $value;
+                },
+                'routing_instructions' => function($value) {
+                    return $value;
+                },
+                'routing_fallback' => function($value) {
+                    return $value;
+                }
+
             ];
 
             

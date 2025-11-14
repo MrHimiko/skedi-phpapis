@@ -18,6 +18,7 @@ use App\Plugins\Integrations\Google\Meet\Service\GoogleMeetService;
 use App\Plugins\Events\Service\BookingReminderService;
 use App\Plugins\Contacts\Service\ContactService;
 use App\Plugins\Workflows\Service\WorkflowExecutionService;
+use App\Plugins\Account\Entity\UserEntity;
 use DateTime;
 
 class EventBookingService
@@ -31,6 +32,7 @@ class EventBookingService
     private GoogleMeetService $googleMeetService;
     private BookingReminderService $reminderService;
     private WorkflowExecutionService $workflowExecutionService;
+    private UserEntity $UserEntity;
 
     public function __construct(
         CrudManager $crudManager,
@@ -41,8 +43,8 @@ class EventBookingService
         GoogleCalendarService $googleCalendarService,
         GoogleMeetService $googleMeetService,
         BookingReminderService $reminderService,
-        WorkflowExecutionService $workflowExecutionService 
-        
+        WorkflowExecutionService $workflowExecutionService,
+        UserEntity $UserEntity
     ) {
         $this->crudManager = $crudManager;
         $this->entityManager = $entityManager;
@@ -53,6 +55,7 @@ class EventBookingService
         $this->googleMeetService = $googleMeetService;
         $this->reminderService = $reminderService;
         $this->workflowExecutionService = $workflowExecutionService;
+        $this->UserEntity = $UserEntity;
     }
 
     public function getMany(array $filters, int $page, int $limit, array $criteria = []): array
@@ -75,9 +78,12 @@ class EventBookingService
         return $this->crudManager->findOne(EventBookingEntity::class, $id, $criteria);
     }
 
+    
+
     public function create(array $data): EventBookingEntity
     {
         try {
+            // Validate event
             if (empty($data['event_id'])) {
                 throw new EventsException('Event ID is required');
             }
@@ -87,153 +93,104 @@ class EventBookingService
                 throw new EventsException('Event not found');
             }
             
-            // Validate time slot
-            if (empty($data['start_time']) || empty($data['end_time'])) {
-                throw new EventsException('Start and end time are required');
-            }
+            // Parse times
+            $startTime = new \DateTime($data['start_time']);
+            $endTime = new \DateTime($data['end_time']);
             
-            // Times from frontend are ALREADY in UTC - no conversion needed!
-            $startTime = $data['start_time'] instanceof \DateTimeInterface 
-                ? clone $data['start_time'] 
-                : new \DateTime($data['start_time'], new \DateTimeZone('UTC'));
+            // Check availability
+            // if (!$this->scheduleService->isTimeSlotAvailable($event, $startTime, $endTime)) {
+            //     throw new EventsException('The selected time slot is not available for the event or its hosts');
+            // }
             
-            $endTime = $data['end_time'] instanceof \DateTimeInterface 
-                ? clone $data['end_time'] 
-                : new \DateTime($data['end_time'], new \DateTimeZone('UTC'));
-            
-            if ($startTime >= $endTime) {
-                throw new EventsException('End time must be after start time');
-            }
-            
-            // Extract timezone from form_data for schedule checking
-            $clientTimezone = null;
-            if (!empty($data['form_data'])) {
-                $formData = is_string($data['form_data']) ? json_decode($data['form_data'], true) : $data['form_data'];
-                if (!empty($formData['timezone'])) {
-                    $clientTimezone = $formData['timezone'];
-                }
-            }
-            
-            // Check if the slot is available - pass the client timezone for schedule validation
-            if (!$this->scheduleService->isTimeSlotAvailableForAll($event, $startTime, $endTime, $clientTimezone)) {
-                throw new EventsException('The selected time slot is not available for the event or its hosts');
-            }
-            
-            // Create the booking
+            // Create booking entity
             $booking = new EventBookingEntity();
             $booking->setEvent($event);
             $booking->setStartTime($startTime);
             $booking->setEndTime($endTime);
-            if ($event->isAcceptanceRequired()) {
-                $booking->setStatus('pending');
-            } else {
-                $booking->setStatus('confirmed');
-            }
-
-            $booking->setBookingToken(bin2hex(random_bytes(32)));
-
-                        
-            // Parse form_data if it's a string
-            if (!empty($data['form_data'])) {
-                $formDataArray = is_string($data['form_data']) ? json_decode($data['form_data'], true) : $data['form_data'];
-                
-                // Handle duration option selection
-                if (isset($data['duration_index']) && is_numeric($data['duration_index'])) {
-                    $durations = $event->getDuration();
-                    $durationIndex = (int)$data['duration_index'];
-                    
-                    if (isset($durations[$durationIndex])) {
-                        $formDataArray['selected_duration'] = $durations[$durationIndex];
-                    }
+            $booking->setStatus($data['status'] ?? 'confirmed');
+            $booking->setCancelled(false);
+            
+            // Set form data
+            if (isset($data['form_data'])) {
+                // Encode array to JSON string if it's an array
+                if (is_array($data['form_data'])) {
+                    $booking->setFormData(json_encode($data['form_data']));
+                } else {
+                    $booking->setFormData($data['form_data']);
                 }
-                
-                // Save form data
-                $booking->setFormDataFromArray($formDataArray);
             }
+            
+            // Set assigned user if provided (from routing)
+            if (isset($data['assigned_to'])) {
+                $assignedUser = $this->entityManager->getRepository(UserEntity::class)->find($data['assigned_to']);
+                if ($assignedUser) {
+                    $booking->setAssignedTo($assignedUser);
+                }
+            }
+            
+            // Generate booking token
+            $booking->setBookingToken($this->generateBookingToken());
             
             $this->entityManager->persist($booking);
+            
+            // Create guests if provided
+            if (isset($data['guests']) && is_array($data['guests'])) {
+                foreach ($data['guests'] as $guestData) {
+                    $guest = new EventGuestEntity();
+                    $guest->setBooking($booking);
+                    $guest->setName($guestData['name'] ?? '');
+                    $guest->setEmail($guestData['email'] ?? '');
+                    $this->entityManager->persist($guest);
+                }
+            }
+            
+            // Create contact if primary contact provided
+            if (isset($data['form_data']['primary_contact'])) {
+                $contactData = $data['form_data']['primary_contact'];
+                $this->contactService->createOrUpdateFromBooking(
+                    $booking,
+                    $contactData['email'] ?? '',
+                    $contactData['name'] ?? '',
+                    $contactData['phone'] ?? null
+                );
+            }
+            
             $this->entityManager->flush();
             
-            // Process guests if provided
-            if (!empty($data['guests']) && is_array($data['guests'])) {
-                foreach ($data['guests'] as $guestData) {
-                    $this->addGuest($booking, $guestData);
+            // Queue reminders for confirmed bookings
+            if ($booking->getStatus() === 'confirmed') {
+                try {
+                    $this->reminderService->queueRemindersForBooking($booking);
+                } catch (\Exception $e) {
+                    // Log but don't fail if reminders fail
+                    error_log('Failed to queue reminders: ' . $e->getMessage());
                 }
             }
             
-            // Also check if there's a primary_contact in form_data and create a guest from it
-            if (!empty($formDataArray['primary_contact'])) {
-                $primaryContact = $formDataArray['primary_contact'];
-                if (!empty($primaryContact['name']) && !empty($primaryContact['email'])) {
-                    // Check if this email already exists in guests to avoid duplicates
-                    $emailExists = false;
-                    if (!empty($data['guests'])) {
-                        foreach ($data['guests'] as $guest) {
-                            if (isset($guest['email']) && $guest['email'] === $primaryContact['email']) {
-                                $emailExists = true;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Only add if not already in guests
-                    if (!$emailExists) {
-                        $this->addGuest($booking, [
-                            'name' => $primaryContact['name'],
-                            'email' => $primaryContact['email'],
-                            'phone' => $primaryContact['phone'] ?? null
-                        ]);
-                    }
-                }
-            }
-            
-            // Create availability records for event hosts
-            $this->scheduleService->handleBookingCreated($booking);
-            
-            // Generate meeting link if needed
-            $meetingInfo = $this->generateMeetingLink($booking, $data);
-            
-            if ($meetingInfo) {
-                $formData = $booking->getFormDataAsArray() ?: [];
-                $formData['online_meeting'] = $meetingInfo;
-                
-                // Add a flag to track which user created the calendar event
-                if (isset($meetingInfo['calendar_creator_user_id'])) {
-                    $formData['calendar_creator_user_id'] = $meetingInfo['calendar_creator_user_id'];
-                }
-                
-                $booking->setFormDataFromArray($formData);
-                
-                $this->entityManager->persist($booking);
-                $this->entityManager->flush();
-            }
-            
+            // Trigger workflow if exists
             try {
-                $this->contactService->createOrUpdateFromBooking($booking);
+               
             } catch (\Exception $e) {
-                // Log the error but don't fail the booking
-                error_log('Failed to create contact from booking: ' . $e->getMessage());
-            }
-
-            // Sync with Google Calendar if integration exists
-            try {
-                $this->syncEventBooking($booking);
-            } catch (\Exception $e) {
-                // Silently catch the exception - don't let calendar sync issues prevent booking creation
-            }
-
-            // Fire workflow trigger for booking.created
-            try {
-                $this->workflowExecutionService->executeForTrigger('booking.created', $booking);
-            } catch (\Exception $e) {
-                // Silently catch - don't let workflow errors break booking creation
+                // Log but don't fail if workflow fails
+                error_log('Failed to trigger workflows: ' . $e->getMessage());
             }
             
             return $booking;
+            
         } catch (\Exception $e) {
             throw new EventsException('Failed to create booking: ' . $e->getMessage());
         }
     }
+
+    /**
+     * Generate unique booking token
+     */
+    private function generateBookingToken(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+
 
     public function update(EventBookingEntity $booking, array $data): void
     {
@@ -338,12 +295,7 @@ class EventBookingService
                 $this->scheduleService->handleBookingCancelled($booking);
                 $this->reminderService->cancelRemindersForBooking($booking);
 
-                // Fire workflow trigger for booking.cancelled
-                try {
-                    $this->workflowExecutionService->executeForTrigger('booking.cancelled', $booking);
-                } catch (\Exception $e) {
-                    // Silently catch - don't let workflow errors break cancellation
-                }
+
 
                 // Delete from Google Calendar
                 try {
@@ -400,12 +352,7 @@ class EventBookingService
             // Update availability records
             $this->scheduleService->handleBookingCancelled($booking);
             
-             // Fire workflow trigger for booking.cancelled
-            try {
-                $this->workflowExecutionService->executeForTrigger('booking.cancelled', $booking);
-            } catch (\Exception $e) {
-                // Silently catch - don't let workflow errors break cancellation
-            }
+
             
             // Delete from Google Calendar using the GoogleCalendarService
             $this->googleCalendarService->deleteGoogleEventsForBooking($booking);

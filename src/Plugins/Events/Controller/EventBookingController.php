@@ -19,6 +19,7 @@ use App\Plugins\Events\Service\BookingReminderService;
 use App\Plugins\Contacts\Service\ContactService;
 use App\Plugins\Forms\Service\FormService;
 use App\Plugins\Forms\Entity\FormSubmissionEntity;
+use App\Plugins\Events\Service\RoutingService;
 
 #[Route('/api/organizations/{organization_id}', requirements: ['organization_id' => '\d+'])]
 class EventBookingController extends AbstractController
@@ -33,6 +34,7 @@ class EventBookingController extends AbstractController
     private EventAssigneeService $assigneeService;
     private BookingReminderService $reminderService;
     private FormService $formService;
+    private RoutingService $routingService;
 
     public function __construct(
         ResponseService $responseService,
@@ -44,7 +46,8 @@ class EventBookingController extends AbstractController
         EmailService $emailService,
         BookingReminderService $reminderService,
         EventAssigneeService $assigneeService,
-        FormService $formService
+        FormService $formService,
+        RoutingService $routingService
     ) {
         $this->responseService = $responseService;
         $this->eventService = $eventService;
@@ -56,6 +59,7 @@ class EventBookingController extends AbstractController
         $this->assigneeService = $assigneeService;
         $this->reminderService = $reminderService;
         $this->formService = $formService;
+        $this->routingService = $routingService;
     }
 
     #[Route('/events/{event_id}/bookings', name: 'event_bookings_get_many#', methods: ['GET'], requirements: ['event_id' => '\d+'])]
@@ -428,16 +432,59 @@ class EventBookingController extends AbstractController
                 return $this->responseService->json(false, 'Invalid email format.', null, 400);
             }
             
-            // Create the booking
+            // ROUTING LOGIC
+            $assignedTo = null;
+            if ($event->getRoutingEnabled()) {
+                try {
+                    // Parse the datetime from booking data
+                    $startTime = new \DateTime($data['start_time']);
+                    
+                    // Call routing service to determine assignee
+                    $routedAssignee = $this->routingService->routeBooking(
+                        $event,
+                        $data['form_data'], // The form data from the booking
+                        $startTime
+                    );
+                    
+                    if ($routedAssignee) {
+                        $assignedTo = $routedAssignee->getUser();
+                        // Add assigned user to booking data
+                        $data['assigned_to'] = $assignedTo->getId();
+                    }
+                } catch (\Exception $e) {
+                    // Log routing error but don't fail booking
+                    // Continue without routing - will use default behavior
+                }
+            }
+            
+            // Create the booking (now includes assigned_to if routing was used)
             $booking = $this->bookingService->create($data);
             
-            // *** SEND EMAILS IMMEDIATELY AFTER BOOKING CREATION (SIMPLE VERSION) ***
+            // If we have an assigned user, update the booking entity
+            if ($assignedTo) {
+                $booking->setAssignedTo($assignedTo);
+                $this->entityManager->flush();
+            }
+            
+            // Send emails (will respect routing assignment)
             $this->sendBookingEmails($booking);
             
             $bookingData = $booking->toArray();
 
             // Add booking token for redirect
             $bookingData['booking_token'] = $booking->getBookingToken();
+            
+            // Add assigned user info if routed
+            if ($assignedTo) {
+                $bookingData['assigned_to'] = [
+                    'id' => $assignedTo->getId(),
+                    'name' => $assignedTo->getName(),
+                    'email' => $assignedTo->getEmail()
+                ];
+                $bookingData['routing_used'] = true;
+            } else {
+                $bookingData['routing_used'] = false;
+            }
 
             // Add guests
             $guests = $this->bookingService->getGuests($booking);
@@ -453,8 +500,6 @@ class EventBookingController extends AbstractController
             return $this->responseService->json(false, $e->getMessage(), null, 500);
         }
     }
-
-
     /**
      * ***  Queue emails  ***
     */

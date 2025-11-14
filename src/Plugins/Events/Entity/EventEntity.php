@@ -54,8 +54,22 @@ class EventEntity
     #[ORM\Column(name: "availability_type", type: "string", length: 50, nullable: false, options: ["default" => "one_host_available"])]
     private string $availabilityType = 'one_host_available';
 
+
+
+
     #[ORM\Column(name: "acceptance_required", type: "boolean", options: ["default" => false])]
     private bool $acceptanceRequired = false;
+
+
+    #[ORM\Column(name: "routing_enabled", type: "boolean", options: ["default" => false])]
+    private bool $routingEnabled = false;
+
+    #[ORM\Column(name: "routing_instructions", type: "text", nullable: true)]
+    private ?string $routingInstructions = null;
+
+    #[ORM\Column(name: "routing_fallback", type: "string", length: 50, options: ["default" => "round_robin"])]
+    private string $routingFallback = 'round_robin';
+
     
     #[ORM\ManyToOne(targetEntity: UserEntity::class)]
     #[ORM\JoinColumn(name: "created_by", referencedColumnName: "id", nullable: false)]
@@ -218,6 +232,42 @@ class EventEntity
         return $this;
     }
 
+    public function getRoutingEnabled(): bool
+    {
+        return $this->routingEnabled;
+    }
+
+    public function setRoutingEnabled(bool $routingEnabled): void
+    {
+        $this->routingEnabled = $routingEnabled;
+    }
+
+    public function isRoutingEnabled(): bool
+    {
+        return $this->routingEnabled;
+    }
+
+    public function getRoutingInstructions(): ?string
+    {
+        return $this->routingInstructions;
+    }
+
+    public function setRoutingInstructions(?string $routingInstructions): void
+    {
+        $this->routingInstructions = $routingInstructions;
+    }
+
+    public function getRoutingFallback(): string
+    {
+        return $this->routingFallback;
+    }
+
+    public function setRoutingFallback(string $routingFallback): void
+    {
+        $this->routingFallback = $routingFallback;
+    }
+
+
 
     public function getAvailabilityType(): string
     {
@@ -310,6 +360,9 @@ class EventEntity
             'created_by' => $this->getCreatedBy()->getId(),
             'buffer_time' => $this->getBufferTime(),
             'advance_notice_minutes' => $this->getAdvanceNoticeMinutes(),
+            'routing_enabled' => $this->routingEnabled,
+            'routing_instructions' => $this->routingInstructions,
+            'routing_fallback' => $this->routingFallback,
             'deleted' => $this->isDeleted(),
             'updated' => $this->getUpdated()->format('Y-m-d H:i:s'),
             'created' => $this->getCreated()->format('Y-m-d H:i:s'),

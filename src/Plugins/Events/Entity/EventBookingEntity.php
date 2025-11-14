@@ -1,7 +1,7 @@
 <?php
 
 namespace App\Plugins\Events\Entity;
-
+use App\Plugins\Account\Entity\UserEntity;
 use Doctrine\ORM\Mapping as ORM;
 use DateTime;
 use DateTimeInterface;
@@ -32,6 +32,10 @@ class EventBookingEntity
     
     #[ORM\Column(name: "form_data", type: "text", nullable: true)]
     private ?string $formData = null;
+
+    #[ORM\ManyToOne(targetEntity: UserEntity::class)]
+    #[ORM\JoinColumn(name: "assigned_to", referencedColumnName: "id", nullable: true)]
+    private ?UserEntity $assignedTo = null;
     
     #[ORM\Column(name: "cancelled", type: "boolean", options: ["default" => false])]
     private bool $cancelled = false;
@@ -89,6 +93,16 @@ class EventBookingEntity
         return $this;
     }
     
+    public function getAssignedTo(): ?UserEntity
+    {
+        return $this->assignedTo;
+    }
+
+    public function setAssignedTo(?UserEntity $assignedTo): void
+    {
+        $this->assignedTo = $assignedTo;
+    }
+
 
     
     public function getStatus(): string
@@ -173,6 +187,7 @@ class EventBookingEntity
             'status' => $this->getStatus(),
             'form_data' => $this->getFormDataAsArray(),
             'cancelled' => $this->isCancelled(),
+            'assigned_to' => $this->assignedTo ? $this->assignedTo->getId() : null,
             'updated' => $this->getUpdated()->format('Y-m-d H:i:s'),
             'created' => $this->getCreated()->format('Y-m-d H:i:s'),
         ];

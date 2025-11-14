@@ -154,6 +154,15 @@ services:
             $additionalSeatsPriceId: '%env(STRIPE_ADDITIONAL_SEATS_PRICE_ID)%'
         public: true
 
+
+    # AI Routing
+    App\Plugins\Events\Service\RoutingService:
+        arguments:
+            $entityManager: '@doctrine.orm.entity_manager'
+            $assigneeService: '@App\Plugins\Events\Service\EventAssigneeService'
+            $scheduleService: '@App\Plugins\Events\Service\EventScheduleService'
+            $openaiApiKey: '%env(OPENAI_API_KEY)%'
+
     # Repositories
     App\Plugins\Billing\Repository\BillingPlanRepository:
         tags: ['doctrine.repository_service']
