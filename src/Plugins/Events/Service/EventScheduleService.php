@@ -215,59 +215,112 @@ class EventScheduleService
      * Check if a specific time slot is available based on the schedule (timezone-aware)
      */
     public function isTimeSlotAvailable(EventEntity $event, DateTimeInterface $startDateTime, DateTimeInterface $endDateTime, ?string $clientTimezone = null): bool
-    {
-        // Ensure the dates are in UTC for internal processing
-        $startUtc = clone $startDateTime;
-        $endUtc = clone $endDateTime;
+{
+    // Convert to UTC for processing
+    $startUtc = clone $startDateTime;
+    $endUtc = clone $endDateTime;
+    
+    if ($startDateTime->getTimezone()->getName() !== 'UTC') {
+        $startUtc->setTimezone(new \DateTimeZone('UTC'));
+    }
+    if ($endDateTime->getTimezone()->getName() !== 'UTC') {
+        $endUtc->setTimezone(new \DateTimeZone('UTC'));
+    }
+    
+    // Get day of week
+    $dayOfWeek = strtolower($startUtc->format('l'));
+    
+    // Get the event schedule
+    $schedule = $this->getScheduleForEvent($event);
+    
+    // If no schedule, allow all bookings
+    if (empty($schedule)) {
+        return true;
+    }
+    
+    // Check if day exists and is enabled
+    if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
+        return false;
+    }
+    
+    // Extract time components
+    $startTime = $startUtc->format('H:i:s');
+    $endTime = $endUtc->format('H:i:s');
+    $scheduleStartTime = $schedule[$dayOfWeek]['start_time'];
+    $scheduleEndTime = $schedule[$dayOfWeek]['end_time'];
+    
+    // Check if schedule crosses midnight in UTC (due to timezone offset)
+    // This happens when start_time > end_time (e.g., 23:00 to 16:00)
+    $crossesMidnight = $scheduleStartTime > $scheduleEndTime;
+    
+    $isWithinSchedule = false;
+    
+    if ($crossesMidnight) {
+        // Schedule crosses midnight (e.g., 23:00 to 16:00)
+        // This means the working hours are:
+        // - From 23:00 to 23:59:59 (end of current day)
+        // - From 00:00:00 to 16:00 (beginning of next day)
         
-        if ($startDateTime->getTimezone()->getName() !== 'UTC') {
-            $startUtc->setTimezone(new \DateTimeZone('UTC'));
+        // Check if booking time is in either valid range
+        if ($startTime >= $scheduleStartTime || $startTime <= $scheduleEndTime) {
+            // Start time is within schedule
+            
+            if ($endTime >= $scheduleStartTime || $endTime <= $scheduleEndTime) {
+                // End time is also within schedule
+                
+                // Make sure the booking doesn't span the "closed" period
+                // (e.g., booking from 15:00 to 23:30 would span the gap from 16:00 to 23:00)
+                if ($startTime <= $scheduleEndTime && $endTime <= $scheduleEndTime) {
+                    // Both times are in the morning portion (good)
+                    $isWithinSchedule = true;
+                } elseif ($startTime >= $scheduleStartTime && $endTime >= $scheduleStartTime) {
+                    // Both times are in the evening portion (good)
+                    // But need to check if end time goes past midnight
+                    if ($endTime > $startTime) {
+                        // Doesn't cross midnight (good)
+                        $isWithinSchedule = true;
+                    } else {
+                        // Crosses midnight, check if end time is within morning limit
+                        $isWithinSchedule = ($endTime <= $scheduleEndTime);
+                    }
+                } else {
+                    // Spans the closed period
+                    $isWithinSchedule = false;
+                }
+            }
         }
-        
-        if ($endDateTime->getTimezone()->getName() !== 'UTC') {
-            $endUtc->setTimezone(new \DateTimeZone('UTC'));
+    } else {
+        // Normal schedule (doesn't cross midnight)
+        // Simple comparison: start_time <= booking <= end_time
+        if ($startTime >= $scheduleStartTime && $endTime <= $scheduleEndTime) {
+            $isWithinSchedule = true;
         }
-        
-        // Get the day of the week
-        $dayOfWeek = strtolower($startUtc->format('l'));
-        
-        // Get the event schedule
-        $schedule = $this->getScheduleForEvent($event);
-        
-        // Check if this day is enabled
-        if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
-            return false; // Day not available
-        }
-        
-        // Extract just the time component for comparison
-        $startTime = $startUtc->format('H:i:s');
-        $endTime = $endUtc->format('H:i:s');
-        
-        // Check if within working hours
-        $scheduleStartTime = $schedule[$dayOfWeek]['start_time'];
-        $scheduleEndTime = $schedule[$dayOfWeek]['end_time'];
-        
-        if ($startTime < $scheduleStartTime || $endTime > $scheduleEndTime) {
-            return false; // Not within working hours
-        }
-        
-        // Check for conflicts with breaks
+    }
+    
+    if (!$isWithinSchedule) {
+        return false;
+    }
+    
+    // Check for conflicts with breaks
+    if (isset($schedule[$dayOfWeek]['breaks']) && is_array($schedule[$dayOfWeek]['breaks'])) {
         foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
+            if (empty($break['start_time']) || empty($break['end_time'])) {
+                continue;
+            }
+            
             $breakStartTime = $break['start_time'];
             $breakEndTime = $break['end_time'];
             
             // Check for overlap
-            if (
-                ($startTime < $breakEndTime && $endTime > $breakStartTime) ||
-                ($startTime <= $breakStartTime && $endTime >= $breakEndTime)
-            ) {
+            if (($startTime < $breakEndTime && $endTime > $breakStartTime) ||
+                ($startTime <= $breakStartTime && $endTime >= $breakEndTime)) {
                 return false; // Overlaps with a break
             }
         }
-        
-        return true; // Available
     }
-
+    
+    return true;
+}
     public function getAvailableTimeSlots(
         EventEntity $event, 
         DateTimeInterface $date, 

@@ -97,10 +97,10 @@ class EventBookingService
             $startTime = new \DateTime($data['start_time']);
             $endTime = new \DateTime($data['end_time']);
             
-            // Check availability
-            // if (!$this->scheduleService->isTimeSlotAvailable($event, $startTime, $endTime)) {
-            //     throw new EventsException('The selected time slot is not available for the event or its hosts');
-            // }
+           
+            if (!$this->scheduleService->isTimeSlotAvailable($event, $startTime, $endTime)) {
+                throw new EventsException('The selected time slot is not available for the event or its hosts');
+            }
             
             // Create booking entity
             $booking = new EventBookingEntity();
