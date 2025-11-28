@@ -215,112 +215,113 @@ class EventScheduleService
      * Check if a specific time slot is available based on the schedule (timezone-aware)
      */
     public function isTimeSlotAvailable(EventEntity $event, DateTimeInterface $startDateTime, DateTimeInterface $endDateTime, ?string $clientTimezone = null): bool
-{
-    // Convert to UTC for processing
-    $startUtc = clone $startDateTime;
-    $endUtc = clone $endDateTime;
-    
-    if ($startDateTime->getTimezone()->getName() !== 'UTC') {
-        $startUtc->setTimezone(new \DateTimeZone('UTC'));
-    }
-    if ($endDateTime->getTimezone()->getName() !== 'UTC') {
-        $endUtc->setTimezone(new \DateTimeZone('UTC'));
-    }
-    
-    // Get day of week
-    $dayOfWeek = strtolower($startUtc->format('l'));
-    
-    // Get the event schedule
-    $schedule = $this->getScheduleForEvent($event);
-    
-    // If no schedule, allow all bookings
-    if (empty($schedule)) {
-        return true;
-    }
-    
-    // Check if day exists and is enabled
-    if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
-        return false;
-    }
-    
-    // Extract time components
-    $startTime = $startUtc->format('H:i:s');
-    $endTime = $endUtc->format('H:i:s');
-    $scheduleStartTime = $schedule[$dayOfWeek]['start_time'];
-    $scheduleEndTime = $schedule[$dayOfWeek]['end_time'];
-    
-    // Check if schedule crosses midnight in UTC (due to timezone offset)
-    // This happens when start_time > end_time (e.g., 23:00 to 16:00)
-    $crossesMidnight = $scheduleStartTime > $scheduleEndTime;
-    
-    $isWithinSchedule = false;
-    
-    if ($crossesMidnight) {
-        // Schedule crosses midnight (e.g., 23:00 to 16:00)
-        // This means the working hours are:
-        // - From 23:00 to 23:59:59 (end of current day)
-        // - From 00:00:00 to 16:00 (beginning of next day)
+    {
+        // Convert to UTC for processing
+        $startUtc = clone $startDateTime;
+        $endUtc = clone $endDateTime;
         
-        // Check if booking time is in either valid range
-        if ($startTime >= $scheduleStartTime || $startTime <= $scheduleEndTime) {
-            // Start time is within schedule
+        if ($startDateTime->getTimezone()->getName() !== 'UTC') {
+            $startUtc->setTimezone(new \DateTimeZone('UTC'));
+        }
+        if ($endDateTime->getTimezone()->getName() !== 'UTC') {
+            $endUtc->setTimezone(new \DateTimeZone('UTC'));
+        }
+        
+        // Get day of week
+        $dayOfWeek = strtolower($startUtc->format('l'));
+        
+        // Get the event schedule
+        $schedule = $this->getScheduleForEvent($event);
+        
+        // If no schedule, allow all bookings
+        if (empty($schedule)) {
+            return true;
+        }
+        
+        // Check if day exists and is enabled
+        if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
+            return false;
+        }
+        
+        // Extract time components
+        $startTime = $startUtc->format('H:i:s');
+        $endTime = $endUtc->format('H:i:s');
+        $scheduleStartTime = $schedule[$dayOfWeek]['start_time'];
+        $scheduleEndTime = $schedule[$dayOfWeek]['end_time'];
+        
+        // Check if schedule crosses midnight in UTC (due to timezone offset)
+        // This happens when start_time > end_time (e.g., 23:00 to 16:00)
+        $crossesMidnight = $scheduleStartTime > $scheduleEndTime;
+        
+        $isWithinSchedule = false;
+        
+        if ($crossesMidnight) {
+            // Schedule crosses midnight (e.g., 23:00 to 16:00)
+            // This means the working hours are:
+            // - From 23:00 to 23:59:59 (end of current day)
+            // - From 00:00:00 to 16:00 (beginning of next day)
             
-            if ($endTime >= $scheduleStartTime || $endTime <= $scheduleEndTime) {
-                // End time is also within schedule
+            // Check if booking time is in either valid range
+            if ($startTime >= $scheduleStartTime || $startTime <= $scheduleEndTime) {
+                // Start time is within schedule
                 
-                // Make sure the booking doesn't span the "closed" period
-                // (e.g., booking from 15:00 to 23:30 would span the gap from 16:00 to 23:00)
-                if ($startTime <= $scheduleEndTime && $endTime <= $scheduleEndTime) {
-                    // Both times are in the morning portion (good)
-                    $isWithinSchedule = true;
-                } elseif ($startTime >= $scheduleStartTime && $endTime >= $scheduleStartTime) {
-                    // Both times are in the evening portion (good)
-                    // But need to check if end time goes past midnight
-                    if ($endTime > $startTime) {
-                        // Doesn't cross midnight (good)
+                if ($endTime >= $scheduleStartTime || $endTime <= $scheduleEndTime) {
+                    // End time is also within schedule
+                    
+                    // Make sure the booking doesn't span the "closed" period
+                    // (e.g., booking from 15:00 to 23:30 would span the gap from 16:00 to 23:00)
+                    if ($startTime <= $scheduleEndTime && $endTime <= $scheduleEndTime) {
+                        // Both times are in the morning portion (good)
                         $isWithinSchedule = true;
+                    } elseif ($startTime >= $scheduleStartTime && $endTime >= $scheduleStartTime) {
+                        // Both times are in the evening portion (good)
+                        // But need to check if end time goes past midnight
+                        if ($endTime > $startTime) {
+                            // Doesn't cross midnight (good)
+                            $isWithinSchedule = true;
+                        } else {
+                            // Crosses midnight, check if end time is within morning limit
+                            $isWithinSchedule = ($endTime <= $scheduleEndTime);
+                        }
                     } else {
-                        // Crosses midnight, check if end time is within morning limit
-                        $isWithinSchedule = ($endTime <= $scheduleEndTime);
+                        // Spans the closed period
+                        $isWithinSchedule = false;
                     }
-                } else {
-                    // Spans the closed period
-                    $isWithinSchedule = false;
+                }
+            }
+        } else {
+            // Normal schedule (doesn't cross midnight)
+            // Simple comparison: start_time <= booking <= end_time
+            if ($startTime >= $scheduleStartTime && $endTime <= $scheduleEndTime) {
+                $isWithinSchedule = true;
+            }
+        }
+        
+        if (!$isWithinSchedule) {
+            return false;
+        }
+        
+        // Check for conflicts with breaks
+        if (isset($schedule[$dayOfWeek]['breaks']) && is_array($schedule[$dayOfWeek]['breaks'])) {
+            foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
+                if (empty($break['start_time']) || empty($break['end_time'])) {
+                    continue;
+                }
+                
+                $breakStartTime = $break['start_time'];
+                $breakEndTime = $break['end_time'];
+                
+                // Check for overlap
+                if (($startTime < $breakEndTime && $endTime > $breakStartTime) ||
+                    ($startTime <= $breakStartTime && $endTime >= $breakEndTime)) {
+                    return false; // Overlaps with a break
                 }
             }
         }
-    } else {
-        // Normal schedule (doesn't cross midnight)
-        // Simple comparison: start_time <= booking <= end_time
-        if ($startTime >= $scheduleStartTime && $endTime <= $scheduleEndTime) {
-            $isWithinSchedule = true;
-        }
+        
+        return true;
     }
-    
-    if (!$isWithinSchedule) {
-        return false;
-    }
-    
-    // Check for conflicts with breaks
-    if (isset($schedule[$dayOfWeek]['breaks']) && is_array($schedule[$dayOfWeek]['breaks'])) {
-        foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
-            if (empty($break['start_time']) || empty($break['end_time'])) {
-                continue;
-            }
-            
-            $breakStartTime = $break['start_time'];
-            $breakEndTime = $break['end_time'];
-            
-            // Check for overlap
-            if (($startTime < $breakEndTime && $endTime > $breakStartTime) ||
-                ($startTime <= $breakStartTime && $endTime >= $breakEndTime)) {
-                return false; // Overlaps with a break
-            }
-        }
-    }
-    
-    return true;
-}
+
     public function getAvailableTimeSlots(
         EventEntity $event, 
         DateTimeInterface $date, 
@@ -356,68 +357,52 @@ class EventScheduleService
         }
     }
 
-    /**
-     * Get base available time slots without checking host availability
-     */
-    /**
-     * Get base available time slots without checking host availability
-     */
-    private function getBaseAvailableTimeSlots(
+
+
+   private function getBaseAvailableTimeSlots(
         EventEntity $event, 
         DateTimeInterface $date, 
         ?int $durationMinutes = null, 
         ?string $clientTimezone = null,
         int $bufferMinutes = 0
     ): array {
-        // Set default timezone if not provided
         if (!$clientTimezone) {
             $clientTimezone = 'UTC';
         }
         
         try {
-            // Validate timezone
             new \DateTimeZone($clientTimezone);
         } catch (\Exception $e) {
-            // Default to UTC if invalid timezone
             $clientTimezone = 'UTC';
         }
         
-        // Default to first duration option if not specified
         if ($durationMinutes === null) {
             $durations = $event->getDuration();
             $durationMinutes = isset($durations[0]['duration']) ? (int)$durations[0]['duration'] : 30;
         }
 
-        // Create client date objects for the requested date
         $clientDate = clone $date;
         if ($date->getTimezone()->getName() !== $clientTimezone) {
             $clientDate->setTimezone(new \DateTimeZone($clientTimezone));
         }
         
-        // Reset to midnight in client timezone
         $clientStartOfDay = clone $clientDate;
         $clientStartOfDay->setTime(0, 0, 0);
         
         $clientEndOfDay = clone $clientDate;
         $clientEndOfDay->setTime(23, 59, 59);
         
-        // Convert to UTC for processing - these define our search window
         $utcStartOfClientDay = clone $clientStartOfDay;
         $utcStartOfClientDay->setTimezone(new \DateTimeZone('UTC'));
         
         $utcEndOfClientDay = clone $clientEndOfDay;
         $utcEndOfClientDay->setTimezone(new \DateTimeZone('UTC'));
         
-        // We need to check UTC days that might contribute to the requested client day
-        // This could include the day before, the day itself, and potentially the day after
         $datesToCheck = [];
-        
-        // Start checking from 1 day before to account for timezones
         $currentDayCheck = clone $utcStartOfClientDay;
         $currentDayCheck->setTime(0, 0, 0);
-        $currentDayCheck->modify('-1 day'); // Start from previous day
+        $currentDayCheck->modify('-1 day');
         
-        // Check 3 days total (previous, current, next) to cover all timezone scenarios
         for ($i = 0; $i < 3; $i++) {
             $datesToCheck[] = clone $currentDayCheck;
             $currentDayCheck->modify('+1 day');
@@ -425,17 +410,14 @@ class EventScheduleService
         
         $allSlots = [];
         
-        // Process each UTC day that could contribute slots to the requested client day
         foreach ($datesToCheck as $utcDayToCheck) {
             $dayOfWeek = strtolower($utcDayToCheck->format('l'));
             $schedule = $this->getScheduleForEvent($event);
             
-            // Skip if day is not enabled in schedule
             if (!isset($schedule[$dayOfWeek]) || !$schedule[$dayOfWeek]['enabled']) {
                 continue;
             }
             
-            // Extract schedule times for this UTC day
             $scheduleStartTime = clone $utcDayToCheck;
             list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['start_time']);
             $scheduleStartTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
@@ -444,13 +426,10 @@ class EventScheduleService
             list($hours, $minutes, $seconds) = explode(':', $schedule[$dayOfWeek]['end_time']);
             $scheduleEndTime->setTime((int)$hours, (int)$minutes, (int)$seconds);
             
-            // MIDNIGHT CROSSOVER FIX: If start_time > end_time, it means availability crosses midnight
             if ($schedule[$dayOfWeek]['start_time'] > $schedule[$dayOfWeek]['end_time']) {
-                // Add 1 day to end time since it's on the next day
                 $scheduleEndTime->modify('+1 day');
             }
             
-            // Convert breaks to DateTime objects
             $breaks = [];
             foreach ($schedule[$dayOfWeek]['breaks'] as $break) {
                 $breakStart = clone $utcDayToCheck;
@@ -461,7 +440,6 @@ class EventScheduleService
                 list($hours, $minutes, $seconds) = explode(':', $break['end_time']);
                 $breakEnd->setTime((int)$hours, (int)$minutes, (int)$seconds);
                 
-                // Handle midnight crossover for breaks as well
                 if ($break['start_time'] > $break['end_time']) {
                     $breakEnd->modify('+1 day');
                 }
@@ -472,10 +450,8 @@ class EventScheduleService
                 ];
             }
             
-            // Get existing bookings for this UTC day and the next day (for crossover)
             $existingBookings = $this->getEventBookingsForDate($event, $utcDayToCheck);
             
-            // Also get bookings from next day if schedule crosses midnight
             if ($schedule[$dayOfWeek]['start_time'] > $schedule[$dayOfWeek]['end_time']) {
                 $nextDay = clone $utcDayToCheck;
                 $nextDay->modify('+1 day');
@@ -483,24 +459,20 @@ class EventScheduleService
                 $existingBookings = array_merge($existingBookings, $nextDayBookings);
             }
             
-            // Generate time slots in 15-minute increments
             $slotStart = clone $scheduleStartTime;
-            $slotIncrement = new \DateInterval('PT15M'); // 15-min increments
+            $slotIncrement = new \DateInterval('PT15M');
             $eventDuration = new \DateInterval('PT' . $durationMinutes . 'M');
             
             while ($slotStart < $scheduleEndTime) {
                 $slotEnd = clone $slotStart;
                 $slotEnd->add($eventDuration);
                 
-                // If slot end is after schedule end, break
                 if ($slotEnd > $scheduleEndTime) {
                     break;
                 }
                 
-                // Check for conflicts
                 $hasConflict = false;
                 
-                // Check breaks
                 foreach ($breaks as $break) {
                     if ($slotStart < $break['end'] && $slotEnd > $break['start']) {
                         $hasConflict = true;
@@ -508,14 +480,11 @@ class EventScheduleService
                     }
                 }
                 
-                // Check bookings WITH BUFFER TIME (in minutes)
                 if (!$hasConflict) {
                     foreach ($existingBookings as $booking) {
-                        // Apply buffer time: extend the busy period AFTER the booking ends
                         $busyUntil = clone $booking['end'];
-                        $busyUntil->add(new \DateInterval('PT' . $bufferMinutes . 'M')); // Add buffer minutes
+                        $busyUntil->add(new \DateInterval('PT' . $bufferMinutes . 'M'));
                         
-                        // Check if new slot conflicts with booking OR its buffer period
                         if ($slotStart < $busyUntil && $slotEnd > $booking['start']) {
                             $hasConflict = true;
                             break;
@@ -524,15 +493,12 @@ class EventScheduleService
                 }
                 
                 if (!$hasConflict) {
-                    // Create client-timezone versions of slot times
                     $clientSlotStart = clone $slotStart;
                     $clientSlotStart->setTimezone(new \DateTimeZone($clientTimezone));
                     
                     $clientSlotEnd = clone $slotEnd;
                     $clientSlotEnd->setTimezone(new \DateTimeZone($clientTimezone));
                     
-                    // Only show slots where the START time is on the requested client day
-                    // This gives a cleaner UX - users navigate to the day to see slots that start on that day
                     if ($clientSlotStart->format('Y-m-d') === $clientDate->format('Y-m-d')) {
                         $allSlots[] = [
                             'start' => $slotStart->format('Y-m-d H:i:s'),
@@ -544,34 +510,27 @@ class EventScheduleService
                     }
                 }
                 
-                // Move to next slot
                 $slotStart->add($slotIncrement);
             }
         }
         
-        // FILTER PAST TIMES + ADVANCE NOTICE
-        // Get current time in client timezone
         $now = new \DateTime('now', new \DateTimeZone($clientTimezone));
         
-        // Get advance notice in minutes (check if event has this property, default to 0)
         $advanceNoticeMinutes = 0;
-        if (method_exists($event, 'getAdvanceNotice')) {
-            $advanceNoticeMinutes = $event->getAdvanceNotice() ?? 0;
+        if (method_exists($event, 'getAdvanceNoticeMinutes')) {
+            $advanceNoticeMinutes = (int)($event->getAdvanceNoticeMinutes() ?? 0);
         }
         
-        // Calculate minimum booking time = now + advance notice
         $minimumBookingTime = clone $now;
         if ($advanceNoticeMinutes > 0) {
             $minimumBookingTime->add(new \DateInterval('PT' . $advanceNoticeMinutes . 'M'));
         }
         
-        // Filter out slots that are in the past or within advance notice period
         $allSlots = array_filter($allSlots, function($slot) use ($minimumBookingTime, $clientTimezone) {
             $slotStartClient = new \DateTime($slot['start_client'], new \DateTimeZone($clientTimezone));
             return $slotStartClient >= $minimumBookingTime;
         });
         
-        // Re-index array after filtering
         $allSlots = array_values($allSlots);
         
         return $allSlots;

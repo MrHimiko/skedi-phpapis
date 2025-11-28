@@ -560,25 +560,19 @@ class ContactService
         $event = $booking->getEvent();
         $organization = $event->getOrganization();
         
-        // Get all assignees for this event
         $assignees = $this->entityManager->getRepository('App\Plugins\Events\Entity\EventAssigneeEntity')
             ->findBy(['event' => $event]);
         
-        // Create host_contacts for each assignee
         foreach ($assignees as $assignee) {
             $host = $assignee->getUser();
             
-            // Check if host_contact already exists
             $existingHostContact = $this->entityManager->getRepository('App\Plugins\Contacts\Entity\HostContactEntity')
                 ->findOneBy([
                     'contact' => $contact,
-                    'host' => $host,
-                    'organization' => $organization,
-                    'deleted' => false
+                    'host' => $host
                 ]);
             
             if (!$existingHostContact) {
-                // Create new host_contact
                 $hostContact = new HostContactEntity();
                 $hostContact->setContact($contact);
                 $hostContact->setHost($host);
@@ -589,7 +583,10 @@ class ContactService
                 
                 $this->entityManager->persist($hostContact);
             } else {
-                // Update existing host_contact
+                if ($existingHostContact->isDeleted()) {
+                    $existingHostContact->setDeleted(false);
+                    $existingHostContact->setOrganization($organization);
+                }
                 $existingHostContact->setLastMeeting(new \DateTime());
                 $existingHostContact->setMeetingCount($existingHostContact->getMeetingCount() + 1);
                 
@@ -597,16 +594,13 @@ class ContactService
             }
         }
         
-        // If no assignees, create host_contact for event creator
         if (empty($assignees)) {
             $creator = $event->getCreatedBy();
             
             $existingHostContact = $this->entityManager->getRepository('App\Plugins\Contacts\Entity\HostContactEntity')
                 ->findOneBy([
                     'contact' => $contact,
-                    'host' => $creator,
-                    'organization' => $organization,
-                    'deleted' => false
+                    'host' => $creator
                 ]);
             
             if (!$existingHostContact) {
@@ -620,6 +614,10 @@ class ContactService
                 
                 $this->entityManager->persist($hostContact);
             } else {
+                if ($existingHostContact->isDeleted()) {
+                    $existingHostContact->setDeleted(false);
+                    $existingHostContact->setOrganization($organization);
+                }
                 $existingHostContact->setLastMeeting(new \DateTime());
                 $existingHostContact->setMeetingCount($existingHostContact->getMeetingCount() + 1);
                 
@@ -629,6 +627,7 @@ class ContactService
         
         $this->entityManager->flush();
     }
+
 
     private function createContactBooking(ContactEntity $contact, EventBookingEntity $booking): void
     {

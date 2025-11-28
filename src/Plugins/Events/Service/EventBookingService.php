@@ -97,7 +97,7 @@ class EventBookingService
             $startTime = new \DateTime($data['start_time']);
             $endTime = new \DateTime($data['end_time']);
             
-           
+        
             if (!$this->scheduleService->isTimeSlotAvailable($event, $startTime, $endTime)) {
                 throw new EventsException('The selected time slot is not available for the event or its hosts');
             }
@@ -157,6 +157,10 @@ class EventBookingService
             
             $this->entityManager->flush();
             
+            // CRITICAL FIX: Create availability records for hosts
+            // This was missing and is why bookings don't appear in /user/{id}/bookings
+            $this->scheduleService->handleBookingCreated($booking);
+            
             // Queue reminders for confirmed bookings
             if ($booking->getStatus() === 'confirmed') {
                 try {
@@ -169,7 +173,7 @@ class EventBookingService
             
             // Trigger workflow if exists
             try {
-               
+            
             } catch (\Exception $e) {
                 // Log but don't fail if workflow fails
                 error_log('Failed to trigger workflows: ' . $e->getMessage());
