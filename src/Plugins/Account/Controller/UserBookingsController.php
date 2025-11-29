@@ -201,8 +201,8 @@ class UserBookingsController extends AbstractController
     {
         $event = $booking->getEvent();
         
-        // Get guests
-        $guests = $this->crudManager->findMany(
+        // Get additional guests from EventGuestEntity
+        $additionalGuests = $this->crudManager->findMany(
             'App\Plugins\Events\Entity\EventGuestEntity',
             [],
             1,
@@ -210,28 +210,67 @@ class UserBookingsController extends AbstractController
             ['booking' => $booking]
         );
         
-        // Get hosts (event assignees)
-        $assignees = $this->crudManager->findMany(
-            'App\Plugins\Events\Entity\EventAssigneeEntity',
-            [],
-            1,
-            100,
-            ['event' => $event]
-        );
+        // Build guests array - start with primary contact from form_data
+        $guests = [];
+        $formData = $booking->getFormDataAsArray();
         
-        // Format hosts data
-        $hosts = array_map(function($assignee) {
-            return [
-                'id' => $assignee->getId(),
-                'user_id' => $assignee->getUser()->getId(),
-                'name' => $assignee->getUser()->getName(),
-                'email' => $assignee->getUser()->getEmail(),
-                'role' => $assignee->getRole(),
+        // Add primary contact as the first guest
+        if (isset($formData['primary_contact'])) {
+            $guests[] = [
+                'id' => null,
+                'name' => $formData['primary_contact']['name'] ?? 'Guest',
+                'email' => $formData['primary_contact']['email'] ?? '',
+                'is_primary' => true
             ];
-        }, $assignees);
+        }
+        
+        // Add additional guests
+        foreach ($additionalGuests as $guest) {
+            $guests[] = [
+                'id' => $guest->getId(),
+                'name' => $guest->getName(),
+                'email' => $guest->getEmail(),
+                'is_primary' => false
+            ];
+        }
+        
+        // Check if booking has assigned_to (from AI routing)
+        $assignedTo = $booking->getAssignedTo();
+        
+        if ($assignedTo) {
+            // If assigned_to exists, only show that user as host
+            $hosts = [
+                [
+                    'id' => null,
+                    'user_id' => $assignedTo->getId(),
+                    'name' => $assignedTo->getName(),
+                    'email' => $assignedTo->getEmail(),
+                    'role' => 'assigned',
+                ]
+            ];
+        } else {
+            // No assigned user - show all event assignees (original behavior)
+            $assignees = $this->crudManager->findMany(
+                'App\Plugins\Events\Entity\EventAssigneeEntity',
+                [],
+                1,
+                100,
+                ['event' => $event]
+            );
+            
+            // Format hosts data
+            $hosts = array_map(function($assignee) {
+                return [
+                    'id' => $assignee->getId(),
+                    'user_id' => $assignee->getUser()->getId(),
+                    'name' => $assignee->getUser()->getName(),
+                    'email' => $assignee->getUser()->getEmail(),
+                    'role' => $assignee->getRole(),
+                ];
+            }, $assignees);
+        }
         
         // Get meeting link from form data
-        $formData = $booking->getFormDataAsArray();
         $meetingLink = null;
         if (isset($formData['online_meeting']['link'])) {
             $meetingLink = $formData['online_meeting']['link'];
@@ -239,25 +278,24 @@ class UserBookingsController extends AbstractController
         
         return [
             'id' => $availabilityRecord->getId(),
-            'user_id' => $user->getId(),
-            'title' => $availabilityRecord->getTitle(),
-            'description' => $availabilityRecord->getDescription(),
-            'start_time' => $booking->getStartTime()->format('Y-m-d H:i:s'),
-            'end_time' => $booking->getEndTime()->format('Y-m-d H:i:s'),
-            'source' => $availabilityRecord->getSource(),
-            'source_id' => $availabilityRecord->getSourceId(),
-            'status' => $booking->getStatus(),
             'booking_id' => $booking->getId(),
             'event_id' => $event->getId(),
             'event_name' => $event->getName(),
-            'location' => $event->getLocation(),
-            'guests' => array_map(fn($guest) => $guest->toArray(), $guests),
-            'hosts' => $hosts,
-            'meeting_link' => $meetingLink,
-            'form_data' => $formData,
+            'title' => $event->getName(),
+            'start_time' => $booking->getStartTime()->format('Y-m-d H:i:s'),
+            'end_time' => $booking->getEndTime()->format('Y-m-d H:i:s'),
+            'status' => $booking->getStatus(),
             'cancelled' => $booking->isCancelled(),
-            'created' => $availabilityRecord->getCreated()->format('Y-m-d H:i:s'),
-            'updated' => $availabilityRecord->getUpdated()->format('Y-m-d H:i:s')
+            'form_data' => $formData,
+            'guests' => $guests,
+            'hosts' => $hosts,
+            'location' => $event->getLocation(),
+            'meeting_link' => $meetingLink,
+            'assigned_to' => $assignedTo ? [
+                'id' => $assignedTo->getId(),
+                'name' => $assignedTo->getName(),
+                'email' => $assignedTo->getEmail()
+            ] : null
         ];
     }
 

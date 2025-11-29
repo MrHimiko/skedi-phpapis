@@ -1,5 +1,4 @@
 <?php
-
 // File: src/Plugins/Events/Controller/PublicBookingController.php
 
 namespace App\Plugins\Events\Controller;
@@ -12,6 +11,7 @@ use App\Service\ResponseService;
 use App\Plugins\Events\Service\EventBookingService;
 use App\Service\CrudManager;
 use App\Plugins\Events\Entity\EventBookingEntity;
+use App\Plugins\Events\Entity\EventGuestEntity;
 use App\Plugins\Email\Service\EmailService;
 
 #[Route('/api/public/bookings')]
@@ -53,7 +53,12 @@ class PublicBookingController extends AbstractController
             $booking = $bookings[0];
             $event = $booking->getEvent();
             $organization = $event->getOrganization();
-            $assignedTo = $booking->getAssignedTo();
+
+            // Fetch guests for this booking
+            $guests = $this->bookingService->getGuests($booking);
+            $guestsArray = array_map(function($guest) {
+                return $guest->toArray();
+            }, $guests);
 
             $data = [
                 'id' => $booking->getId(),
@@ -73,15 +78,11 @@ class PublicBookingController extends AbstractController
                     'slug' => $organization->getSlug()
                 ],
                 'form_data' => $booking->getFormDataAsArray(),
-                'assigned_to' => $assignedTo ? [
-                    'id' => $assignedTo->getId(),
-                    'name' => $assignedTo->getName(),
-                    'email' => $assignedTo->getEmail(),
-                    'avatar' => 'https://global.divhunt.com/4788048f319dc48101678d9e69f5077e_216568.png'
-                ] : null
+                'guests' => $guestsArray
             ];
 
-            return $this->responseService->json(true, 'Booking found', $data);
+            return $this->responseService->json(true, 'Booking retrieved successfully', $data);
+
         } catch (\Exception $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 500);
         }
@@ -105,31 +106,33 @@ class PublicBookingController extends AbstractController
 
             $booking = $bookings[0];
 
-            // Check if already cancelled
             if ($booking->isCancelled()) {
-                return $this->responseService->json(false, 'Booking is already cancelled');
+                return $this->responseService->json(false, 'Booking is already cancelled', null, 400);
             }
 
-            // Check if booking is in the past
-            $now = new \DateTime();
-            if ($booking->getEndTime() < $now) {
-                return $this->responseService->json(false, 'Cannot cancel past bookings');
-            }
-
-            // Get cancellation reason if provided
-            $data = json_decode($request->getContent(), true) ?: [];
+            $data = json_decode($request->getContent(), true) ?? [];
             $reason = $data['reason'] ?? null;
 
             // Cancel the booking
-            $this->bookingService->update($booking, [
-                'status' => 'canceled',
-                'cancelled' => true
-            ]);
+            $booking->setCancelled(true);
+            $booking->setStatus('canceled');
 
-            // Send cancellation email to host with reason
+            // Store cancellation reason in form data if provided
+            if ($reason) {
+                $formData = $booking->getFormDataAsArray() ?? [];
+                $formData['cancellation_reason'] = $reason;
+                $formData['cancelled_at'] = (new \DateTime())->format('c');
+                $formData['cancelled_by'] = 'guest';
+                $booking->setFormDataFromArray($formData);
+            }
+
+            $this->bookingService->update($booking, []);
+
+            // Send cancellation email
             $this->sendCancellationEmail($booking, $reason);
 
             return $this->responseService->json(true, 'Booking cancelled successfully');
+
         } catch (\Exception $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 500);
         }
@@ -140,30 +143,52 @@ class PublicBookingController extends AbstractController
         try {
             $event = $booking->getEvent();
             $formData = $booking->getFormDataAsArray();
-            $guestName = $formData['primary_contact']['name'] ?? 'Guest';
+            $organization = $event->getOrganization();
+
             $guestEmail = $formData['primary_contact']['email'] ?? null;
+            $guestName = $formData['primary_contact']['name'] ?? 'Guest';
 
-            // Get host email - either assigned user or event creator
-            $assignedTo = $booking->getAssignedTo();
-            $hostEmail = $assignedTo ? $assignedTo->getEmail() : $event->getCreatedBy()->getEmail();
-            $hostName = $assignedTo ? $assignedTo->getName() : $event->getCreatedBy()->getName();
+            if (!$guestEmail) {
+                return;
+            }
 
-            // Queue cancellation email to host
-            $this->emailService->queueEmail(
-                $hostEmail,
+            $startTime = $booking->getStartTime();
+
+            // Send to guest
+            $this->emailService->send(
+                $guestEmail,
                 'booking_cancelled',
                 [
-                    'host_name' => $hostName,
                     'guest_name' => $guestName,
-                    'guest_email' => $guestEmail,
                     'event_name' => $event->getName(),
-                    'booking_date' => $booking->getStartTime()->format('l, F j, Y'),
-                    'booking_time' => $booking->getStartTime()->format('g:i A'),
-                    'cancellation_reason' => $reason ?? 'No reason provided'
-                ],
-                $event->getOrganization()
+                    'event_date' => $startTime->format('F j, Y'),
+                    'event_time' => $startTime->format('g:i A'),
+                    'company_name' => $organization->getName(),
+                    'cancellation_reason' => $reason
+                ]
             );
+
+            // Send to host(s)
+            $organizer = $event->getCreatedBy();
+            if ($organizer) {
+                $this->emailService->send(
+                    $organizer->getEmail(),
+                    'booking_cancelled_host',
+                    [
+                        'host_name' => $organizer->getName(),
+                        'guest_name' => $guestName,
+                        'guest_email' => $guestEmail,
+                        'event_name' => $event->getName(),
+                        'event_date' => $startTime->format('F j, Y'),
+                        'event_time' => $startTime->format('g:i A'),
+                        'company_name' => $organization->getName(),
+                        'cancellation_reason' => $reason
+                    ]
+                );
+            }
+
         } catch (\Exception $e) {
+            // Log error but don't fail the cancellation
             error_log('Failed to send cancellation email: ' . $e->getMessage());
         }
     }
