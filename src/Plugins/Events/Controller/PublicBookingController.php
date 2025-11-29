@@ -1,5 +1,7 @@
 <?php
 
+// File: src/Plugins/Events/Controller/PublicBookingController.php
+
 namespace App\Plugins\Events\Controller;
 
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -51,6 +53,7 @@ class PublicBookingController extends AbstractController
             $booking = $bookings[0];
             $event = $booking->getEvent();
             $organization = $event->getOrganization();
+            $assignedTo = $booking->getAssignedTo();
 
             $data = [
                 'id' => $booking->getId(),
@@ -69,7 +72,13 @@ class PublicBookingController extends AbstractController
                     'name' => $organization->getName(),
                     'slug' => $organization->getSlug()
                 ],
-                'form_data' => $booking->getFormDataAsArray()
+                'form_data' => $booking->getFormDataAsArray(),
+                'assigned_to' => $assignedTo ? [
+                    'id' => $assignedTo->getId(),
+                    'name' => $assignedTo->getName(),
+                    'email' => $assignedTo->getEmail(),
+                    'avatar' => 'https://global.divhunt.com/4788048f319dc48101678d9e69f5077e_216568.png'
+                ] : null
             ];
 
             return $this->responseService->json(true, 'Booking found', $data);
@@ -132,32 +141,28 @@ class PublicBookingController extends AbstractController
             $event = $booking->getEvent();
             $formData = $booking->getFormDataAsArray();
             $guestName = $formData['primary_contact']['name'] ?? 'Guest';
-            $guestEmail = $formData['primary_contact']['email'] ?? '';
+            $guestEmail = $formData['primary_contact']['email'] ?? null;
 
-            // Get event assignees (hosts)
-            $assignees = $this->crudManager->findMany(
-                'App\Plugins\Events\Entity\EventAssigneeEntity',
-                [],
-                1,
-                100,
-                ['event' => $event]
+            // Get host email - either assigned user or event creator
+            $assignedTo = $booking->getAssignedTo();
+            $hostEmail = $assignedTo ? $assignedTo->getEmail() : $event->getCreatedBy()->getEmail();
+            $hostName = $assignedTo ? $assignedTo->getName() : $event->getCreatedBy()->getName();
+
+            // Queue cancellation email to host
+            $this->emailService->queueEmail(
+                $hostEmail,
+                'booking_cancelled',
+                [
+                    'host_name' => $hostName,
+                    'guest_name' => $guestName,
+                    'guest_email' => $guestEmail,
+                    'event_name' => $event->getName(),
+                    'booking_date' => $booking->getStartTime()->format('l, F j, Y'),
+                    'booking_time' => $booking->getStartTime()->format('g:i A'),
+                    'cancellation_reason' => $reason ?? 'No reason provided'
+                ],
+                $event->getOrganization()
             );
-
-            foreach ($assignees as $assignee) {
-                $this->emailService->send(
-                    $assignee->getUser()->getEmail(),
-                    'booking_cancelled_by_guest',
-                    [
-                        'host_name' => $assignee->getUser()->getName(),
-                        'guest_name' => $guestName,
-                        'guest_email' => $guestEmail,
-                        'event_name' => $event->getName(),
-                        'meeting_date' => $booking->getStartTime()->format('F j, Y'),
-                        'meeting_time' => $booking->getStartTime()->format('g:i A'),
-                        'cancellation_reason' => $reason ?: 'No reason provided'
-                    ]
-                );
-            }
         } catch (\Exception $e) {
             error_log('Failed to send cancellation email: ' . $e->getMessage());
         }

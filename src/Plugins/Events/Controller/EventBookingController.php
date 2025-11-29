@@ -503,6 +503,11 @@ class EventBookingController extends AbstractController
     /**
      * ***  Queue emails  ***
     */
+    /**
+     * ***  Queue emails  ***
+     * If booking has assigned_to, only email that user
+     * Otherwise, email all assignees
+     */
     private function sendBookingEmails($booking): void
     {
         try {
@@ -528,20 +533,34 @@ class EventBookingController extends AbstractController
                 'organization_id' => $organization->getId()
             ];
             
+            // Check if booking has an assigned user (from AI routing)
+            $assignedTo = $booking->getAssignedTo();
+            
             if ($booking->getStatus() === 'pending') {
-                // PENDING: Send approval request to hosts
-                $assignees = $this->assigneeService->getAssigneesByEvent($event);
-                foreach ($assignees as $assignee) {
+                // PENDING: Send approval request to host(s)
+                if ($assignedTo) {
+                    // Only send to assigned user
                     $hostData = array_merge($emailData, [
-                        'host_name' => $assignee->getUser()->getName()
+                        'host_name' => $assignedTo->getName()
                     ]);
-                    
-                    // Queue host approval email
                     $this->emailService->send(
-                        $assignee->getUser()->getEmail(),
+                        $assignedTo->getEmail(),
                         'meeting_scheduled_host',
                         $hostData
                     );
+                } else {
+                    // Send to all assignees
+                    $assignees = $this->assigneeService->getAssigneesByEvent($event);
+                    foreach ($assignees as $assignee) {
+                        $hostData = array_merge($emailData, [
+                            'host_name' => $assignee->getUser()->getName()
+                        ]);
+                        $this->emailService->send(
+                            $assignee->getUser()->getEmail(),
+                            'meeting_scheduled_host',
+                            $hostData
+                        );
+                    }
                 }
             } else {
                 // CONFIRMED: Send confirmation to both
@@ -550,17 +569,29 @@ class EventBookingController extends AbstractController
                 $this->emailService->send($guestEmail, 'meeting_scheduled', $emailData);
                 
                 // Queue host notifications
-                $assignees = $this->assigneeService->getAssigneesByEvent($event);
-                foreach ($assignees as $assignee) {
+                if ($assignedTo) {
+                    // Only send to assigned user
                     $hostData = array_merge($emailData, [
-                        'host_name' => $assignee->getUser()->getName()
+                        'host_name' => $assignedTo->getName()
                     ]);
-                    
                     $this->emailService->send(
-                        $assignee->getUser()->getEmail(),
+                        $assignedTo->getEmail(),
                         'meeting_scheduled_host',
                         $hostData
                     );
+                } else {
+                    // Send to all assignees
+                    $assignees = $this->assigneeService->getAssigneesByEvent($event);
+                    foreach ($assignees as $assignee) {
+                        $hostData = array_merge($emailData, [
+                            'host_name' => $assignee->getUser()->getName()
+                        ]);
+                        $this->emailService->send(
+                            $assignee->getUser()->getEmail(),
+                            'meeting_scheduled_host',
+                            $hostData
+                        );
+                    }
                 }
                 
                 // Queue reminders
@@ -712,7 +743,7 @@ class EventBookingController extends AbstractController
     /**
      * Send notification email to host(s)
      */
-    private function sendHostNotificationEmail(EventBookingEntity $booking): void
+     private function sendHostNotificationEmail(EventBookingEntity $booking): void
     {
         try {
             $event = $booking->getEvent();
@@ -767,19 +798,35 @@ class EventBookingController extends AbstractController
                 'custom_fields' => $formData['custom_fields'] ?? []
             ];
             
-            // **HOST EMAILS** - Send to all assignees
-            $assignees = $this->assigneeService->getAssigneesByEvent($event);
+            // Check if booking has an assigned user (from AI routing)
+            $assignedTo = $booking->getAssignedTo();
             
-            foreach ($assignees as $assignee) {
+            if ($assignedTo) {
+                // Only send to assigned user
                 $hostData = array_merge($commonHostData, [
-                    'host_name' => $assignee->getUser()->getName()
+                    'host_name' => $assignedTo->getName()
                 ]);
                 
                 $this->emailService->send(
-                    $assignee->getUser()->getEmail(),
-                    'meeting_scheduled_host', // Template handles status internally
+                    $assignedTo->getEmail(),
+                    'meeting_scheduled_host',
                     $hostData
                 );
+            } else {
+                // Send to all assignees (original behavior)
+                $assignees = $this->assigneeService->getAssigneesByEvent($event);
+                
+                foreach ($assignees as $assignee) {
+                    $hostData = array_merge($commonHostData, [
+                        'host_name' => $assignee->getUser()->getName()
+                    ]);
+                    
+                    $this->emailService->send(
+                        $assignee->getUser()->getEmail(),
+                        'meeting_scheduled_host',
+                        $hostData
+                    );
+                }
             }
             
         } catch (\Exception $e) {

@@ -618,13 +618,29 @@ class EventScheduleService
     {
         try {
             $event = $booking->getEvent();
+            $assignedTo = $booking->getAssignedTo();
+
+            // If booking has an assigned user, only create availability for them
+            if ($assignedTo) {
+                $this->userAvailabilityService->createInternalAvailability(
+                    $assignedTo,
+                    $event->getName(),
+                    $booking->getStartTime(),
+                    $booking->getEndTime(),
+                    $event,
+                    $booking
+                );
+                return;
+            }
+
+            // No assigned user - create availability for all hosts (original behavior)
             $hosts = $this->getEventHosts($event);
-            
+
             // FIX: If no hosts, use the creator
             if (empty($hosts) && $event->getCreatedBy()) {
                 $hosts = [$event->getCreatedBy()];
             }
-            
+
             foreach ($hosts as $host) {
                 $this->userAvailabilityService->createInternalAvailability(
                     $host,
@@ -640,7 +656,7 @@ class EventScheduleService
             error_log('Failed to create host availability records: ' . $e->getMessage());
         }
     }
-    
+
     /**
      * Handle booking updates to also update availability records
     */
