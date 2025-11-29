@@ -92,6 +92,8 @@ class StripeWebhookService
         $planId = $session['metadata']['plan_id'] ?? null;
         $additionalSeats = (int)($session['metadata']['additional_seats'] ?? 0);
         $subscriptionId = $session['subscription'] ?? null;
+        $isUpgrade = $session['metadata']['is_upgrade'] ?? 'false';
+        $oldSubscriptionId = $session['metadata']['old_subscription_id'] ?? '';
         
         if (!$organizationId || !$planId || !$subscriptionId) {
             $this->log("Missing required data", [
@@ -157,6 +159,19 @@ class StripeWebhookService
                 'seats' => $additionalSeats
             ]);
             
+            // Cancel old subscription if this is an upgrade
+            if ($isUpgrade === 'true' && $oldSubscriptionId) {
+                try {
+                    $this->stripe->subscriptions->cancel($oldSubscriptionId);
+                    $this->log("Cancelled old subscription", ['old_id' => $oldSubscriptionId]);
+                } catch (\Exception $e) {
+                    $this->log("Failed to cancel old subscription", [
+                        'old_id' => $oldSubscriptionId,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+            
             // Also retrieve and update the Stripe subscription to ensure it has correct metadata
             try {
                 $this->stripe->subscriptions->update($subscriptionId, [
@@ -178,7 +193,6 @@ class StripeWebhookService
             ]);
         }
     }
-
     private function handleSubscriptionEvent($subscription): void
     {
         $this->log("handleSubscriptionEvent", [

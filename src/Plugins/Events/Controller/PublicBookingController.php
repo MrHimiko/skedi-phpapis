@@ -54,12 +54,6 @@ class PublicBookingController extends AbstractController
             $event = $booking->getEvent();
             $organization = $event->getOrganization();
 
-            // Fetch guests for this booking
-            $guests = $this->bookingService->getGuests($booking);
-            $guestsArray = array_map(function($guest) {
-                return $guest->toArray();
-            }, $guests);
-
             $data = [
                 'id' => $booking->getId(),
                 'status' => $booking->getStatus(),
@@ -77,12 +71,20 @@ class PublicBookingController extends AbstractController
                     'name' => $organization->getName(),
                     'slug' => $organization->getSlug()
                 ],
-                'form_data' => $booking->getFormDataAsArray(),
-                'guests' => $guestsArray
+                'form_data' => $booking->getFormDataAsArray()
             ];
 
-            return $this->responseService->json(true, 'Booking retrieved successfully', $data);
+            // Add assigned_to info if booking was routed
+            $assignedTo = $booking->getAssignedTo();
+            if ($assignedTo) {
+                $data['assigned_to'] = [
+                    'id' => $assignedTo->getId(),
+                    'name' => $assignedTo->getName(),
+                    'email' => $assignedTo->getEmail()
+                ];
+            }
 
+            return $this->responseService->json(true, 'Booking found', $data);
         } catch (\Exception $e) {
             return $this->responseService->json(false, $e->getMessage(), null, 500);
         }

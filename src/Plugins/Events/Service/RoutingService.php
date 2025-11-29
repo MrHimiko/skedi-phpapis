@@ -1,7 +1,5 @@
 <?php
 
-// File: src/Plugins/Events/Service/RoutingService.php
-
 namespace App\Plugins\Events\Service;
 
 use App\Plugins\Events\Entity\EventEntity;
@@ -9,7 +7,6 @@ use App\Plugins\Events\Entity\EventBookingEntity;
 use App\Plugins\Events\Entity\EventAssigneeEntity;
 use App\Plugins\Events\Service\EventAssigneeService;
 use App\Plugins\Events\Service\EventScheduleService;
-use App\Service\CrudManager;
 use Doctrine\ORM\EntityManagerInterface;
 use DateTime;
 
@@ -18,21 +15,29 @@ class RoutingService
     private EntityManagerInterface $entityManager;
     private EventAssigneeService $assigneeService;
     private EventScheduleService $scheduleService;
-    private CrudManager $crudManager;
     private string $openaiApiKey;
+    private string $logFile = '/tmp/routing_debug.log';
     
     public function __construct(
         EntityManagerInterface $entityManager,
         EventAssigneeService $assigneeService,
         EventScheduleService $scheduleService,
-        CrudManager $crudManager,
         string $openaiApiKey
     ) {
         $this->entityManager = $entityManager;
         $this->assigneeService = $assigneeService;
         $this->scheduleService = $scheduleService;
-        $this->crudManager = $crudManager;
         $this->openaiApiKey = $openaiApiKey;
+    }
+    
+    private function log($message, $data = null): void
+    {
+        $entry = date('Y-m-d H:i:s') . " - " . $message;
+        if ($data !== null) {
+            $entry .= " - " . json_encode($data, JSON_PRETTY_PRINT);
+        }
+        $entry .= "\n";
+        file_put_contents($this->logFile, $entry, FILE_APPEND);
     }
     
     /**
@@ -43,8 +48,13 @@ class RoutingService
         array $formData, 
         DateTime $requestedTime
     ): ?EventAssigneeEntity {
+        $this->log("=== ROUTING START ===");
+        $this->log("Event ID: " . $event->getId());
+        $this->log("Form Data", $formData);
+        
         // If routing not enabled, return null (use default behavior)
         if (!$event->getRoutingEnabled()) {
+            $this->log("Routing not enabled, skipping");
             return null;
         }
         
@@ -52,17 +62,23 @@ class RoutingService
         $assignees = $this->assigneeService->getAssigneesByEvent($event);
         $availableAssignees = $this->filterAvailableAssignees($assignees, $requestedTime);
         
+        $this->log("Available assignees count: " . count($availableAssignees));
+        
         if (empty($availableAssignees)) {
+            $this->log("No assignees available");
             throw new \Exception('No team members available at selected time');
         }
         
         // If only one assignee available, return them
         if (count($availableAssignees) === 1) {
+            $this->log("Only one assignee, returning: " . $availableAssignees[0]->getUser()->getName());
             return $availableAssignees[0];
         }
         
         // Try AI routing if instructions exist
         if ($event->getRoutingInstructions()) {
+            $this->log("Routing instructions: " . $event->getRoutingInstructions());
+            
             try {
                 $selectedAssignee = $this->routeWithAI(
                     $event,
@@ -72,15 +88,17 @@ class RoutingService
                 );
                 
                 if ($selectedAssignee) {
+                    $this->log("AI selected: " . $selectedAssignee->getUser()->getName());
                     return $selectedAssignee;
                 }
             } catch (\Exception $e) {
-                // Log AI failure, continue to fallback
+                $this->log("AI routing failed: " . $e->getMessage());
                 error_log('AI routing failed: ' . $e->getMessage());
             }
         }
         
         // Fallback routing
+        $this->log("Using fallback routing");
         return $this->applyFallbackRouting($event, $availableAssignees);
     }
     
@@ -92,101 +110,10 @@ class RoutingService
         $available = [];
         
         foreach ($assignees as $assignee) {
-            // Check if user has availability at requested time
-            // This should check calendar integrations, existing bookings, etc.
-            // For MVP, let's assume everyone is available
             $available[] = $assignee;
         }
         
         return $available;
-    }
-    
-    /**
-     * Get booking history for the last 2 weeks for an event
-     */
-    private function getRecentBookingHistory(EventEntity $event): array
-    {
-        $twoWeeksAgo = new DateTime('-14 days');
-        $now = new DateTime();
-        
-        $bookings = $this->crudManager->findMany(
-            EventBookingEntity::class,
-            [],
-            1,
-            500, // Get up to 500 recent bookings
-            ['event' => $event],
-            function($queryBuilder) use ($twoWeeksAgo, $now) {
-                $queryBuilder
-                    ->andWhere('t1.startTime >= :twoWeeksAgo')
-                    ->andWhere('t1.startTime <= :now')
-                    ->andWhere('t1.cancelled = :cancelled')
-                    ->setParameter('twoWeeksAgo', $twoWeeksAgo)
-                    ->setParameter('now', $now)
-                    ->setParameter('cancelled', false)
-                    ->orderBy('t1.startTime', 'DESC');
-            }
-        );
-        
-        $history = [];
-        foreach ($bookings as $booking) {
-            $assignedTo = $booking->getAssignedTo();
-            $formData = $booking->getFormDataAsArray();
-            
-            $history[] = [
-                'id' => $booking->getId(),
-                'start_time' => $booking->getStartTime()->format('Y-m-d H:i'),
-                'assigned_to_id' => $assignedTo ? $assignedTo->getId() : null,
-                'assigned_to_name' => $assignedTo ? $assignedTo->getName() : null,
-                'guest_name' => $formData['primary_contact']['name'] ?? null,
-                'guest_email' => $formData['primary_contact']['email'] ?? null,
-            ];
-        }
-        
-        return $history;
-    }
-    
-    /**
-     * Get assignment distribution stats
-     */
-    private function getAssignmentDistribution(EventEntity $event, array $assignees): array
-    {
-        $twoWeeksAgo = new DateTime('-14 days');
-        $distribution = [];
-        
-        foreach ($assignees as $assignee) {
-            $user = $assignee->getUser();
-            
-            // Count bookings assigned to this user in the last 2 weeks
-            $qb = $this->entityManager->createQueryBuilder();
-            $qb->select('COUNT(b.id)')
-                ->from(EventBookingEntity::class, 'b')
-                ->where('b.event = :event')
-                ->andWhere('b.assignedTo = :user')
-                ->andWhere('b.startTime >= :twoWeeksAgo')
-                ->andWhere('b.cancelled = :cancelled')
-                ->setParameter('event', $event)
-                ->setParameter('user', $user)
-                ->setParameter('twoWeeksAgo', $twoWeeksAgo)
-                ->setParameter('cancelled', false);
-            
-            $count = (int) $qb->getQuery()->getSingleScalarResult();
-            
-            $distribution[] = [
-                'user_id' => $user->getId(),
-                'user_name' => $user->getName(),
-                'bookings_last_2_weeks' => $count
-            ];
-        }
-        
-        // Calculate percentages
-        $total = array_sum(array_column($distribution, 'bookings_last_2_weeks'));
-        foreach ($distribution as &$item) {
-            $item['percentage'] = $total > 0 
-                ? round(($item['bookings_last_2_weeks'] / $total) * 100, 1) 
-                : 0;
-        }
-        
-        return $distribution;
     }
     
     /**
@@ -213,23 +140,21 @@ class RoutingService
             ];
         }
         
-        // Get booking history and distribution
-        $recentBookings = $this->getRecentBookingHistory($event);
-        $distribution = $this->getAssignmentDistribution($event, $availableAssignees);
+        $this->log("Assignee context", $assigneeContext);
         
-        // Build prompt with enhanced context
+        // Build prompt
         $prompt = $this->buildAIPrompt(
-            $event,
             $formData,
             $assigneeContext,
-            $event->getRoutingInstructions(),
-            $recentBookings,
-            $distribution,
-            $requestedTime
+            $event->getRoutingInstructions()
         );
+        
+        $this->log("AI Prompt", ['prompt' => $prompt]);
         
         // Call OpenAI
         $response = $this->callOpenAI($prompt);
+        
+        $this->log("AI Response", $response);
         
         // Parse response and find assignee
         if (isset($response['assignee_id'])) {
@@ -238,7 +163,7 @@ class RoutingService
                     // Log the routing decision
                     $this->logRoutingDecision(
                         $event,
-                        null, // booking not created yet
+                        null,
                         $formData,
                         $response,
                         $assignee->getUser()->getId(),
@@ -248,62 +173,57 @@ class RoutingService
                     return $assignee;
                 }
             }
+            $this->log("Assignee ID from AI not found in available assignees: " . $response['assignee_id']);
         }
         
         return null;
     }
     
     /**
-     * Build AI prompt with enhanced context
+     * Build AI prompt - IMPROVED VERSION
      */
-    private function buildAIPrompt(
-        EventEntity $event,
-        array $formData,
-        array $assignees,
-        string $instructions,
-        array $recentBookings,
-        array $distribution,
-        DateTime $requestedTime
-    ): string {
-        $prompt = "You are a meeting routing assistant for a scheduling platform. Your job is to assign incoming meeting requests to the most appropriate team member based on the provided instructions and context.\n\n";
+    private function buildAIPrompt(array $formData, array $assignees, string $instructions): string
+    {
+        // Extract key info from form data
+        $customerEmail = $formData['primary_contact']['email'] ?? 'unknown';
+        $customerName = $formData['primary_contact']['name'] ?? 'unknown';
         
-        // Event info
-        $prompt .= "=== EVENT INFORMATION ===\n";
-        $prompt .= "Event: " . $event->getName() . "\n";
-        $prompt .= "Requested Time: " . $requestedTime->format('Y-m-d H:i') . " (" . $requestedTime->format('l') . ")\n\n";
+        $prompt = "You are a meeting routing assistant. Your job is to assign incoming meeting requests to the correct team member.\n\n";
         
-        // Form data from the booking request
-        $prompt .= "=== BOOKING REQUEST (FORM DATA) ===\n";
-        $prompt .= json_encode($formData, JSON_PRETTY_PRINT) . "\n\n";
+        $prompt .= "=== CUSTOMER INFO ===\n";
+        $prompt .= "Name: " . $customerName . "\n";
+        $prompt .= "Email: " . $customerEmail . "\n";
         
-        // Available assignees
-        $prompt .= "=== AVAILABLE TEAM MEMBERS ===\n";
-        $prompt .= json_encode($assignees, JSON_PRETTY_PRINT) . "\n\n";
+        // Determine email type
+        $publicDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com', 'mail.com', 'protonmail.com'];
+        $emailDomain = strtolower(substr(strrchr($customerEmail, "@"), 1));
+        $isPublicEmail = in_array($emailDomain, $publicDomains);
         
-        // Distribution stats
-        $prompt .= "=== ASSIGNMENT DISTRIBUTION (Last 2 Weeks) ===\n";
-        $prompt .= json_encode($distribution, JSON_PRETTY_PRINT) . "\n\n";
+        $prompt .= "Email Domain: " . $emailDomain . "\n";
+        $prompt .= "Email Type: " . ($isPublicEmail ? "PUBLIC (personal email like Gmail)" : "PRIVATE (company/business email)") . "\n\n";
         
-        // Recent booking history (limit to last 20 for prompt size)
-        if (!empty($recentBookings)) {
-            $prompt .= "=== RECENT BOOKINGS (Last 2 Weeks, up to 20) ===\n";
-            $prompt .= json_encode(array_slice($recentBookings, 0, 20), JSON_PRETTY_PRINT) . "\n\n";
+        // Add any custom fields
+        if (!empty($formData['custom_fields'])) {
+            $prompt .= "=== ADDITIONAL INFO ===\n";
+            foreach ($formData['custom_fields'] as $key => $value) {
+                $prompt .= $key . ": " . (is_array($value) ? json_encode($value) : $value) . "\n";
+            }
+            $prompt .= "\n";
         }
         
-        // Instructions
-        $prompt .= "=== ROUTING INSTRUCTIONS ===\n";
+        $prompt .= "=== AVAILABLE TEAM MEMBERS ===\n";
+        foreach ($assignees as $assignee) {
+            $prompt .= "- ID: " . $assignee['id'] . ", Name: " . $assignee['name'] . "\n";
+        }
+        $prompt .= "\n";
+        
+        $prompt .= "=== ROUTING RULES ===\n";
         $prompt .= $instructions . "\n\n";
         
         $prompt .= "=== YOUR TASK ===\n";
-        $prompt .= "Based on ALL the information above, select the single best team member to handle this meeting.\n";
-        $prompt .= "Consider:\n";
-        $prompt .= "1. The routing instructions (highest priority)\n";
-        $prompt .= "2. Current workload distribution\n";
-        $prompt .= "3. The form data / booking request details\n";
-        $prompt .= "4. Recent booking patterns\n\n";
-        
-        $prompt .= "Return ONLY valid JSON with this exact format: {\"assignee_id\": <user_id_number>, \"reason\": \"brief explanation of your choice\"}\n";
-        $prompt .= "Do not include any other text, just the JSON object.";
+        $prompt .= "Based on the ROUTING RULES above, select the correct team member for this customer.\n";
+        $prompt .= "You MUST return valid JSON with this exact format: {\"assignee_id\": <id>, \"reason\": \"<explanation>\"}\n";
+        $prompt .= "Use the ID number from the AVAILABLE TEAM MEMBERS list.\n";
         
         return $prompt;
     }
@@ -320,37 +240,55 @@ class RoutingService
             'Content-Type: application/json'
         ]);
         
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+        $payload = [
             'model' => 'gpt-4o-mini',
             'messages' => [
                 ['role' => 'user', 'content' => $prompt]
             ],
-            'temperature' => 0.3,
+            'temperature' => 0.1, // Lower temperature for more consistent results
             'max_tokens' => 200
-        ]));
+        ];
         
+        $this->log("OpenAI Request Payload", $payload);
+        
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10); // 10 second timeout for AI routing
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
         curl_close($ch);
         
+        $this->log("OpenAI HTTP Code: " . $httpCode);
+        $this->log("OpenAI Raw Response", ['response' => $response]);
+        
+        if ($curlError) {
+            $this->log("CURL Error: " . $curlError);
+            throw new \Exception('OpenAI API call failed: ' . $curlError);
+        }
+        
         if ($httpCode !== 200 || !$response) {
-            throw new \Exception('OpenAI API call failed');
+            $this->log("OpenAI API error - HTTP " . $httpCode);
+            throw new \Exception('OpenAI API call failed with HTTP ' . $httpCode);
         }
         
         $data = json_decode($response, true);
         $content = $data['choices'][0]['message']['content'] ?? '';
         
-        // Parse the JSON response - handle potential markdown wrapping
+        $this->log("AI Content Response: " . $content);
+        
+        // Clean up the response - remove markdown code blocks if present
         $content = trim($content);
         $content = preg_replace('/^```json\s*/i', '', $content);
+        $content = preg_replace('/^```\s*/i', '', $content);
         $content = preg_replace('/\s*```$/i', '', $content);
         
+        // Parse the JSON response
         $result = json_decode($content, true);
         if (!$result) {
+            $this->log("Failed to parse AI response as JSON: " . $content);
             throw new \Exception('Invalid JSON response from AI: ' . $content);
         }
         
@@ -363,6 +301,8 @@ class RoutingService
     private function applyFallbackRouting(EventEntity $event, array $availableAssignees): EventAssigneeEntity
     {
         $strategy = $event->getRoutingFallback() ?? 'round_robin';
+        
+        $this->log("Fallback strategy: " . $strategy);
         
         switch ($strategy) {
             case 'least_busy':
@@ -382,7 +322,6 @@ class RoutingService
      */
     private function pickRoundRobin(array $assignees): EventAssigneeEntity
     {
-        // Sort by last_assigned_at
         usort($assignees, function($a, $b) {
             $aLast = $this->getLastAssignedTime($a);
             $bLast = $this->getLastAssignedTime($b);
@@ -448,7 +387,7 @@ class RoutingService
     }
     
     /**
-     * Log routing decision
+     * Log routing decision to database
      */
     private function logRoutingDecision(
         EventEntity $event,
@@ -460,7 +399,7 @@ class RoutingService
     ): void {
         try {
             $sql = "INSERT INTO event_routing_log 
-                    (event_id, booking_id, form_data, ai_response, assigned_to, routing_method, created_at) 
+                    (event_id, booking_id, form_data, ai_response, assigned_to, routing_method, created) 
                     VALUES (:event_id, :booking_id, :form_data, :ai_response, :assigned_to, :method, NOW())";
             
             $stmt = $this->entityManager->getConnection()->prepare($sql);
@@ -473,8 +412,7 @@ class RoutingService
                 'method' => $method
             ]);
         } catch (\Exception $e) {
-            // Log but don't fail
-            error_log('Failed to log routing decision: ' . $e->getMessage());
+            $this->log("Failed to log routing decision: " . $e->getMessage());
         }
     }
 }
